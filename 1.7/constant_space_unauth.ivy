@@ -23,6 +23,7 @@ relation prepared(N:node, R:round, V:value) # a quorum of prepare triggers a vot
 relation voted(N:node, R:round, V:value) # a quorum of votes makes a decision; that's 2a in Paxos
 relation decided(N:node, R:round, V:value)
 relation locked(N:node, R:round, V:value)
+relation proposal(R:round, V:value)
 
 # relation voted_prepared(N:node, R:round, V:value)
 # relation accepted_prepared(N:node, R:round, V:value)
@@ -36,6 +37,7 @@ after init {
     voted(N,R,V) := false;
     decided(N,R,V) := false;
     locked(N,R,V) := false;
+    proposal(R,V) := false;
 }
 
 export action join_round(n:node, r:round) = {
@@ -83,10 +85,23 @@ export action decide(n:node, r:round, v:value, q:quorum) = {
     decided(n, r, v) := true;
 }
 
+export action propose_1(r:round, v:value, q:quorum) = {
+    # case in which no member of the quorum has ever voted
+    require q_member(N,q) & R < r -> left_round(N,R) & ~voted(N,R,V);
+    proposal(r,v) := true;
+}
+
+export action propose_2(r:round, v:value, q:quorum, b:blocking, r1:round) = {
+    require q_member(N,q) & R < r -> left_round(N,R);
+    require q_member(N,q) & R < r & voted(N,R,V) -> R < r1; # r1 is the max voted round
+    require q_member(N,q) & voted(N,r1,V) -> V = v; # v is the max voted value
+    require exists N . well_behaved(N) & (safe_at(N,r1,v) | all_safe(N,r1)) ; # v is safe at r1; the quantified N is the proposer
+    proposal(r,v) := true;
+}
 
 # # the agreement property:
 # ####################
-invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
+# invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
 
 # notion of choosable and safe at:
 ##################################
@@ -99,6 +114,8 @@ invariant well_behaved(N) & safe_at(N, R, V) -> is_safe_at(R,V)
 invariant well_behaved(N) & all_safe(N, R2) -> forall R1,V1 . R1 < R2 -> ~choosable(R1,V1)
 # NOTE: the following is not equivalent to the above if there's only one value...
 # invariant well_behaved(N) & all_safe(N, R) -> forall V. is_safe_at(R,V)
+
+invariant proposal(R,V) -> is_safe_at(R,V)
 
 invariant well_behaved(N) & voted(N,R,V) -> is_safe_at(R,V)
 
