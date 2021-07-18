@@ -194,6 +194,9 @@ isolate protocol = {
         # the max round below which all values are known safe:
         individual max_all_safe: round
         # invariant: no value is choosable at all in a round r where r < max_all_safe
+        individual decision:value
+        relation prepared(N:node,V:value) # who prepared what in the current round
+        relation voted(N:node,V:value) # who voted for what in the current round
 
         # for use when proposing:
         relation joined(N:node) # who joined the current round
@@ -215,6 +218,8 @@ isolate protocol = {
         export action start_round(r:round) = {
             require r > rnd;
             rnd := r;
+            prepared(N,V) := false;
+            voted(N,V) := false;
             if proposers.is_proposer(n,r) {
                 joined(N) := N = n;
                 highest_vote(N,R,V) := last_vote.present & N = n & V = last_vote.val & R = last_vote.rnd;
@@ -249,6 +254,48 @@ isolate protocol = {
             m.rnd := rnd;
             m.val := v;
             call shim.broadcast(n,m);
+        }
+
+        implement shim.proposal_handler.handle(m:msg) {
+            if (m.rnd = rnd & (forall V. ~prepared(n,V)) & (locked -> last_vote.val = m.val)) {
+                prepared(n,m.val) := true;
+                var m2:msg;
+                m2.kind := msg_kind.prepare;
+                m2.rnd := rnd;
+                m2.val := m.val;
+                call shim.broadcast(n,m);
+            }
+        }
+
+        implement shim.prepare_handler.handle(m:msg) {
+            if (m.rnd = rnd) {
+                prepared(m.src, m.val) := true;
+            }
+        }
+
+        export action vote(v:value, q:quorum) = {
+            require q_member(N,q) -> prepared(N,v);
+            locked := true;
+            last_vote.present := true;
+            last_vote.val := v;
+            last_vote.rnd := rnd;
+            # send vote message:
+            var m:msg;
+            m.kind := msg_kind.vote;
+            m.rnd := rnd;
+            m.val := v;
+            call shim.broadcast(n,m);
+        }
+
+        implement shim.vote_handler.handle(m:msg) {
+            if (m.rnd = rnd) {
+                voted(m.src, m.val) := true;
+            }
+        }
+
+        export action decide(v:value, q:quorum) = {
+            require q_member(N,q) -> voted(N,v);
+            decision := v;
         }
     }
 } with round, intersection_assumptions
