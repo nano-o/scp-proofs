@@ -94,17 +94,19 @@ isolate abstract_protol = {
         proposal(r,v) := true;
     }
 
-    export action propose_2(r:round, v:value, q:quorum, b:blocking, r1:round) = {
+    export action propose_2(r:round, v:value, q:quorum, r1:round) = {
         require q_member(N,q) & R < r -> left_round(N,R);
         require q_member(N,q) & R < r & voted(N,R,V) -> R <= r1; # r1 is the max voted round
-        require q_member(N,q) & voted(N,r1,V) -> V = v; # v is the max voted value; what if there are multiple such values? then we can't establish it's safe; does this break liveness?
+        require q_member(N,q) & voted(N,r1,V) -> V = v; # v is the max voted value; what if there are multiple such values? then we can't establish it's safe. Note that it's okay if there's no vote a all in r1 since we require that v is safe at r1, and there are no votes after that.
+        # We could require the following instead of the above, but we might loose liveness:
+        # require exists B . forall N. b_member(N,B) -> voted(N,r1,v);
         require exists N . well_behaved(N) & (safe_at(N,r1,v) | all_safe(N,r1)) ; # v is safe at r1; the quantified N is the proposer
         proposal(r,v) := true;
     }
 
     # the agreement property:
     # #####################
-    invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
+    # invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
 
     # notion of choosable and safe at:
     ##################################
