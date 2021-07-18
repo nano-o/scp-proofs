@@ -197,10 +197,12 @@ isolate protocol = {
         individual decision:value
         relation prepared(N:node,V:value) # who prepared what in the current round
         relation voted(N:node,V:value) # who voted for what in the current round
+        relation highest_safe_at(N:node, R:round, V:value) # highest value a node reported safe at; this contains at most one entry per node
+        relation highest_all_safe(N:node, R:round) # highest all_safe report by a node; this contains at most one entry per node
 
         # for use when proposing:
         relation joined(N:node) # who joined the current round
-        relation highest_vote(N:node, R:round, V:value) # highest votes as reported in join messages
+        relation highest_vote(N:node, R:round, V:value) # highest votes as reported in join messages; this contains at most on entry per node
 
         # just a shorthand:
         relation safe_at(R:round, V:value)
@@ -211,7 +213,9 @@ isolate protocol = {
             last_vote.present := false;
             max_safe.present := false;
             max_all_safe := 0;
-            locked := false
+            locked := false;
+            highest_safe_at(N,R,V) := false;
+            highest_all_safe(N,R) := false;
         }
 
         # a leader starts a new round:
@@ -227,6 +231,7 @@ isolate protocol = {
             else {
                 var m:msg;
                 m.kind := msg_kind.start_round;
+                m.src := n;
                 m.rnd := r;
                 m.rv := last_vote;
             }
@@ -251,6 +256,7 @@ isolate protocol = {
             # broadcast a propose message:
             var m: msg;
             m.kind := msg_kind.proposal;
+            m.src := n;
             m.rnd := rnd;
             m.val := v;
             call shim.broadcast(n,m);
@@ -261,6 +267,7 @@ isolate protocol = {
                 prepared(n,m.val) := true;
                 var m2:msg;
                 m2.kind := msg_kind.prepare;
+                m2.src := n;
                 m2.rnd := rnd;
                 m2.val := m.val;
                 call shim.broadcast(n,m);
@@ -273,12 +280,51 @@ isolate protocol = {
             }
         }
 
+        action update_max_safe(r:round, v:value) = {
+            if (r > max_all_safe & (max_safe.present & r <= max_safe.rnd -> max_safe.val ~= v)) { # otherwise do nothing
+                if (max_safe.present) {
+                    if (r <= max_safe.rnd) {
+                        max_all_safe := r;
+                    }
+                    else if (max_safe.val ~= v) {
+                        max_all_safe := max_safe.rnd;
+                        max_safe.rnd := r;
+                        max_safe.val := v;
+                    }
+                    else {
+                        max_safe.rnd := r;
+                        max_safe.val := v;
+                    }
+                }
+                else {
+                    max_safe.present := true;
+                    max_safe.rnd := r;
+                    max_safe.val := v;
+                }
+            };
+            var m:msg;
+            m.src := n;
+            # send all_safe message:
+            m.kind := msg_kind.all_safe;
+            m.rnd := max_all_safe;
+            call shim.broadcast(n,m);
+            # send safe_at message:
+            m.kind := msg_kind.safe_at;
+            m.rv := max_safe;
+            call shim.broadcast(n,m);
+        }
+
+        implement shim.safe_at_handler.handle(m:msg) {
+        }
+
         export action vote(v:value, q:quorum) = {
             require q_member(N,q) -> prepared(N,v);
             locked := true;
+            # update last_vote:
             last_vote.present := true;
             last_vote.val := v;
             last_vote.rnd := rnd;
+            call update_max_safe(rnd, v);
             # send vote message:
             var m:msg;
             m.kind := msg_kind.vote;
