@@ -3,7 +3,7 @@
 # We start with the domain model (nodes, rounds, values, quorums, blocking sets, etc.)
 include order
 
-type node
+instance node : iterable # nodes are a set with an order, that can be iterated over (see order.ivy in the standard library)
 type value
 instance round : unbounded_sequence # this establishes that rounds are totally ordered by < with least element 0
 type quorum
@@ -29,6 +29,7 @@ isolate abstract_protol = {
     relation prepared(N:node, R:round, V:value) # a quorum of prepare triggers a vote; TODO: do we need that to ensure that at most a one value can be voted for by well-behaved nodes in a given round?
     relation voted(N:node, R:round, V:value) # a quorum of votes makes a decision; that's 2a in Paxos
     relation decided(N:node, R:round, V:value)
+    # having locks instead of always checking that a proposal is safe makes the protocol a little simpler but seems equivalent
     relation locked(N:node, R:round, V:value)
     relation proposal(R:round, V:value)
 
@@ -106,7 +107,7 @@ isolate abstract_protol = {
 
     # the agreement property:
     # #####################
-    # invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
+    invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
 
     # notion of choosable and safe at:
     ##################################
@@ -155,53 +156,161 @@ isolate abstract_protol = {
 
 # Concrete protocol model
 
-# object msg_kind = {
-    # type this = {proposal, prevote, precommit}
-# }
+object msg_kind = {
+    type this = {proposal, prepare, vote, safe_at, all_safe, start_round}
+}
 
-# # Here we define the type of messages `msg`. Its members are structs with the fields described below.
-# object msg = {
-    # type this = struct {
-        # m_kind : msg_kind,
-        # m_src  : node,
-        # m_round : round,
-        # m_value : value,
-        # m_vround : round
-    # }
-# }
+object round_val_opt = { # an optional round-value pair
+    type this = struct {
+        present : bool,
+        rnd : round,
+        val : value
+    }
+}
 
-# isolate shim = {
+# Here we define the type of messages `msg`. Its members are structs with the fields described below.
+# NOTE: we could also have different message types instead of a single type of messages with a kind field
+object msg = {
+    type this = struct {
+        kind : msg_kind,
+        src  : node,
+        rnd : round, # current round
+        val : value,
+        rv : round_val_opt
+    }
+}
 
-    # # In order not repeat the same code for each handler, we use a handler
-    # # module parameterized by the type of message it will handle. Below we
-    # # instantiate this module for the 3 types of messages of Tendermint
-    # module handler(p_kind) = {
-        # action handle(dst:node,m:msg)
-        # object spec = {
-            # before handle {
-                # assert sent(m,dst) & m.m_kind = p_kind
-            # }
-        # }
-    # }
 
-    # instance proposal_handler : handler(msg_kind.proposal)
-    # instance prevote_handler : handler(msg_kind.prevote)
-    # instance precommit_handler : handler(msg_kind.precommit)
+isolate protocol = {
 
-    # relation sent(M:msg,N:node)
+    object server(n:node) = {
 
-    # action broadcast(src:node,m:msg)
-    # action send(src:node,dst:node,m:msg)
+        individual rnd:round # the current round of the node
+        individual locked:bool
+        individual last_vote:round_val_opt
+        # the max (round,val) known safe:
+        individual max_safe:round_val_opt
+        # invariant: max_safe.val is safe at max_safe.rnd, i.e. no different value is choosable in a round r where r < max_safe.rnd
+        # the max round below which all values are known safe:
+        individual max_all_safe: round
+        # invariant: no value is choosable at all in a round r where r < max_all_safe
 
-    # specification {
-        # after init {
-            # sent(M,D) := false;
-        # }
-        # before broadcast {
-            # sent(m,D) := true
-        # }
-        # before send {
-            # sent(m,dst) := true
-        # }
-    # }
+        # for use when proposing:
+        relation joined(N:node) # who joined the current round
+        relation highest_vote(N:node, R:round, V:value) # highest votes as reported in join messages
+
+        # just a shorthand:
+        relation safe_at(R:round, V:value)
+        definition safe_at(r:round,v:value) = (max_safe.present & max_safe.val = v & r <= max_safe.rnd) | r <= max_all_safe
+
+        after init {
+            rnd := 0;
+            last_vote.present := false;
+            max_safe.present := false;
+            max_all_safe := 0;
+            locked := false
+        }
+
+        # a leader starts a new round:
+        export action start_round(r:round) = {
+            require r > rnd;
+            rnd := r;
+            if proposers.is_proposer(n,r) {
+                joined(N) := N = n;
+                highest_vote(N,R,V) := last_vote.present & N = n & V = last_vote.val & R = last_vote.rnd;
+            }
+            else {
+                var m:msg;
+                m.kind := msg_kind.start_round;
+                m.rnd := r;
+                m.rv := last_vote;
+            }
+        }
+
+        implement shim.start_round_handler.handle(m:msg) {
+            if (m.rnd = rnd) {
+                joined(m.src) := true;
+                highest_vote(N,R,V) := highest_vote(N,R,V) | (m.rv.present & N = m.src & R = m.rv.rnd & V = m.rv.val);
+            }
+        }
+
+        export action propose(v:value, q:quorum, r1:round) = {
+            require q_member(N,q) -> joined(N); # all members of q have joined round r
+            require r1 < rnd;
+            require
+                (forall N,R,V . q_member(N,q) -> ~highest_vote(N,R,V)) # no member of q ever voted
+            |   (forall N,R,V.
+                    (q_member(N,q) & highest_vote(N,R,V) -> R <= r1) # r1 is the max voted round in q
+                &   (q_member(N,q) & highest_vote(N,r1,V) -> V = v) # only v was voted in round r1 among q
+                &   safe_at(r1,v) ); # v is safe at r1
+            # broadcast a propose message:
+            var m: msg;
+            m.kind := msg_kind.proposal;
+            m.rnd := rnd;
+            m.val := v;
+            call shim.broadcast(n,m);
+        }
+    }
+} with round, intersection_assumptions
+
+isolate proposers = {
+    # Each round has a unique proposer. In order to avoid a
+    # function from round to node (which makes verification more difficult), we
+    # abstract over this function using a relation.
+    relation is_proposer(N:node, R:round)
+    export action get_proposer(r:round) returns (n:node)
+    specification {
+        property is_proposer(N1,R) & is_proposer(N2,R) -> N1 = N2
+        after get_proposer {
+            ensure is_proposer(n,r);
+        }
+    }
+    # this can be implemented by taking the round modulo the number of nodes:
+    implementation {
+        function f(R:round):node
+        definition f(r:round) = <<<r % `node.size`>>>
+        definition is_proposer(N,R) = N = f(R)
+        implement get_proposer {
+            n := f(r);
+        }
+    }
+}
+
+trusted isolate shim = {
+
+    # In order not repeat the same code for each handler, we use a handler
+    # module parameterized by the type of message it will handle.
+    module handler(k) = {
+        action handle(dst:node,m:msg)
+        object spec = {
+            before handle {
+                assert sent(m,dst) & m.kind = k
+            }
+        }
+    }
+
+    instance proposal_handler : handler(msg_kind.proposal)
+    instance prepare_handler : handler(msg_kind.prepare)
+    instance vote_handler : handler(msg_kind.vote)
+    instance safe_at_handler : handler(msg_kind.safe_at)
+    instance all_safe_handler : handler(msg_kind.all_safe)
+    instance start_round_handler : handler(msg_kind.start_round)
+
+    relation sent(M:msg,N:node)
+
+    action broadcast(src:node,m:msg)
+    action send(src:node,dst:node,m:msg)
+
+    specification {
+        after init {
+            sent(M,D) := false;
+        }
+        before broadcast {
+            sent(m,D) := true
+        }
+        before send {
+            sent(m,dst) := true
+        }
+    }
+}
 
