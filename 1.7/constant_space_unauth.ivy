@@ -18,6 +18,7 @@ axiom exists N . well_behaved(N) & b_member(N,B) # every blocking set contains a
 relation left_round(N:node, R:round)
 # information about what is safe will propagate using a Bracha-like mechanism; this information is also strictly monotonic
 relation safe_at(N:node, R:round, V:value) # node N says V is safe at R
+# NOTE: we don't really need all_safe because we propagate safe_at for all rounds
 relation all_safe(N:node, R:round) # node N says everything is safe below R
 relation prepared(N:node, R:round, V:value) # a quorum of prepare triggers a vote; we need that to ensure that at most a one value can be voted for by well-behaved nodes in a given round
 relation voted(N:node, R:round, V:value) # a quorum of votes makes a decision; that's 2a in Paxos
@@ -114,6 +115,10 @@ invariant well_behaved(N) & safe_at(N, R, V) -> is_safe_at(R,V)
 invariant well_behaved(N) & all_safe(N, R2) -> forall R1,V1 . R1 < R2 -> ~choosable(R1,V1)
 # NOTE: the following is not equivalent to the above if there's only one value...
 # invariant well_behaved(N) & all_safe(N, R) -> forall V. is_safe_at(R,V)
+# NOTE: all_safe can just be inferred from safe_at:
+relation all_safe_2(N:node,R:round)
+definition all_safe_2(N,R1) = exists V1,R2,V2 . safe_at(N,R1,V1) & V1 ~= V2 & R1 < R2 & safe_at(N,R2,V2)
+invariant well_behaved(N) & all_safe_2(N, R2) -> forall R1,V1 . R1 < R2 -> ~choosable(R1,V1)
 
 invariant proposal(R,V) -> is_safe_at(R,V)
 
