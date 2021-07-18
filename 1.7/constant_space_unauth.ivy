@@ -26,7 +26,7 @@ isolate abstract_protol = {
     relation safe_at(N:node, R:round, V:value) # node N says V is safe at R
     # NOTE: we don't really need all_safe because we propagate safe_at for all rounds
     relation all_safe(N:node, R:round) # node N says everything is safe below R
-    relation prepared(N:node, R:round, V:value) # a quorum of prepare triggers a vote; we need that to ensure that at most a one value can be voted for by well-behaved nodes in a given round
+    relation prepared(N:node, R:round, V:value) # a quorum of prepare triggers a vote; TODO: do we need that to ensure that at most a one value can be voted for by well-behaved nodes in a given round?
     relation voted(N:node, R:round, V:value) # a quorum of votes makes a decision; that's 2a in Paxos
     relation decided(N:node, R:round, V:value)
     relation locked(N:node, R:round, V:value)
@@ -96,15 +96,15 @@ isolate abstract_protol = {
 
     export action propose_2(r:round, v:value, q:quorum, b:blocking, r1:round) = {
         require q_member(N,q) & R < r -> left_round(N,R);
-        require q_member(N,q) & R < r & voted(N,R,V) -> R < r1; # r1 is the max voted round
-        require q_member(N,q) & voted(N,r1,V) -> V = v; # v is the max voted value
+        require q_member(N,q) & R < r & voted(N,R,V) -> R <= r1; # r1 is the max voted round
+        require q_member(N,q) & voted(N,r1,V) -> V = v; # v is the max voted value; what if there are multiple such values? then we can't establish it's safe; does this break liveness?
         require exists N . well_behaved(N) & (safe_at(N,r1,v) | all_safe(N,r1)) ; # v is safe at r1; the quantified N is the proposer
         proposal(r,v) := true;
     }
 
-    # # the agreement property:
-    # ####################
-    # invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
+    # the agreement property:
+    # #####################
+    invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
 
     # notion of choosable and safe at:
     ##################################
@@ -122,6 +122,7 @@ isolate abstract_protol = {
     definition all_safe_2(N,R1) = exists V1,R2,V2 . safe_at(N,R1,V1) & V1 ~= V2 & R1 < R2 & safe_at(N,R2,V2)
     invariant well_behaved(N) & all_safe_2(N, R2) -> forall R1,V1 . R1 < R2 -> ~choosable(R1,V1)
 
+    # proposals are safe
     invariant proposal(R,V) -> is_safe_at(R,V)
 
     invariant well_behaved(N) & voted(N,R,V) -> is_safe_at(R,V)
@@ -149,3 +150,56 @@ isolate abstract_protol = {
     invariant well_behaved(N) & voted(N,R2,V2) & R1 < R2 -> left_round(N,R1)
 
 } with round, intersection_assumptions
+
+# Concrete protocol model
+
+# object msg_kind = {
+    # type this = {proposal, prevote, precommit}
+# }
+
+# # Here we define the type of messages `msg`. Its members are structs with the fields described below.
+# object msg = {
+    # type this = struct {
+        # m_kind : msg_kind,
+        # m_src  : node,
+        # m_round : round,
+        # m_value : value,
+        # m_vround : round
+    # }
+# }
+
+# isolate shim = {
+
+    # # In order not repeat the same code for each handler, we use a handler
+    # # module parameterized by the type of message it will handle. Below we
+    # # instantiate this module for the 3 types of messages of Tendermint
+    # module handler(p_kind) = {
+        # action handle(dst:node,m:msg)
+        # object spec = {
+            # before handle {
+                # assert sent(m,dst) & m.m_kind = p_kind
+            # }
+        # }
+    # }
+
+    # instance proposal_handler : handler(msg_kind.proposal)
+    # instance prevote_handler : handler(msg_kind.prevote)
+    # instance precommit_handler : handler(msg_kind.precommit)
+
+    # relation sent(M:msg,N:node)
+
+    # action broadcast(src:node,m:msg)
+    # action send(src:node,dst:node,m:msg)
+
+    # specification {
+        # after init {
+            # sent(M,D) := false;
+        # }
+        # before broadcast {
+            # sent(m,D) := true
+        # }
+        # before send {
+            # sent(m,dst) := true
+        # }
+    # }
+
