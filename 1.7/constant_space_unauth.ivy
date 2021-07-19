@@ -160,9 +160,16 @@ object msg_kind = {
     type this = {proposal, prepare, vote, safe_at, all_safe, start_round}
 }
 
-object round_val_opt = { # an optional round-value pair
+object pair_opt_t = { # an optional round-value pair
     type this = struct {
         present : bool,
+        rnd : round,
+        val : value
+    }
+}
+
+object pair_t = {
+    type this = struct {
         rnd : round,
         val : value
     }
@@ -174,12 +181,11 @@ object msg = {
     type this = struct {
         kind : msg_kind,
         src  : node,
-        rnd : round, # current round
+        rnd : round,
         val : value,
-        rv : round_val_opt
+        rv : pair_opt_t
     }
 }
-
 
 isolate protocol = {
 
@@ -187,13 +193,14 @@ isolate protocol = {
 
         individual rnd:round # the current round of the node
         individual locked:bool
-        individual last_vote:round_val_opt
+        individual last_vote:pair_opt_t
         # the max (round,val) known safe:
-        individual max_safe:round_val_opt # TODO: option not needed; round can always be equal to max_all_safe
+        individual max_safe:pair_t
         # invariant: max_safe.val is safe at max_safe.rnd, i.e. no different value is choosable in a round r where r < max_safe.rnd
         # the max round below which all values are known safe:
         individual max_all_safe: round
         # invariant: no value is choosable at all in a round r where r < max_all_safe
+        # invariant: max_all_safe <= max_safe.rnd
         individual decision:value
         relation prepared(N:node,V:value) # who prepared what in the current round
         relation voted(N:node,V:value) # who voted for what in the current round
@@ -206,12 +213,12 @@ isolate protocol = {
 
         # just a shorthand:
         relation safe_at(R:round, V:value)
-        definition safe_at(r:round,v:value) = (max_safe.present & max_safe.val = v & r <= max_safe.rnd) | r <= max_all_safe
+        definition safe_at(r:round,v:value) = (max_safe.val = v & r <= max_safe.rnd) | r <= max_all_safe
 
         after init {
             rnd := 0;
             last_vote.present := false;
-            max_safe.present := false;
+            max_safe.rnd := 0;
             max_all_safe := 0;
             locked := false;
             heard_safe_at(N,R,V) := false;
@@ -286,7 +293,7 @@ isolate protocol = {
             safe_at_(R,V) := *; # havoc
             # now we assume that safe_at_ describes what's safe according to what the node knows:
             assume R <= max_all_safe -> safe_at_(R,V);
-            assume max_safe.present & R <= max_safe.rnd & V = max_safe.val -> safe_at_(R,V);
+            assume R <= max_safe.rnd & V = max_safe.val -> safe_at_(R,V);
             assume R <= r -> safe_at_(R, v);
             # then we set max_safe and max_all_safe accordingly
             max_safe.val := *;
@@ -296,12 +303,24 @@ isolate protocol = {
             max_all_safe := *;
             assume R <= max_all_safe -> safe_at_(R,V);
             assume (forall V . safe_at_(R,V)) -> R <= max_all_safe;
+            # now send messages:
+            var m:msg;
+            m.src := n;
+            # send all_safe message:
+            m.kind := msg_kind.all_safe;
+            m.rnd := max_all_safe;
+            call shim.broadcast(n,m);
+            # send safe_at message:
+            m.kind := msg_kind.safe_at;
+            m.rnd := max_safe.rnd;
+            m.val := max_safe.val;
+            call shim.broadcast(n,m);
         }
 
         action new_safe_val_imperative(r:round, v:value) = {
             # imperative version of new_safe_val
-            if (r > max_all_safe & (max_safe.present & r <= max_safe.rnd -> max_safe.val ~= v)) { # otherwise do nothing
-                if (max_safe.present) {
+            if (r > max_all_safe & (max_all_safe < max_safe.rnd & r <= max_safe.rnd -> max_safe.val ~= v)) { # otherwise do nothing
+                if (max_all_safe < max_safe.rnd) {
                     if (r <= max_safe.rnd) {
                         max_all_safe := r;
                     }
@@ -316,7 +335,6 @@ isolate protocol = {
                     }
                 }
                 else {
-                    max_safe.present := true;
                     max_safe.rnd := r;
                     max_safe.val := v;
                 }
@@ -329,7 +347,8 @@ isolate protocol = {
             call shim.broadcast(n,m);
             # send safe_at message:
             m.kind := msg_kind.safe_at;
-            m.rv := max_safe;
+            m.rnd := max_safe.rnd;
+            m.val := max_safe.val;
             call shim.broadcast(n,m);
         }
 
@@ -346,14 +365,10 @@ isolate protocol = {
             require max_all_safe < r;
             require b_member(N,b) -> exists R . r <= R & heard_all_safe(N, R);
             max_all_safe := r;
-            # this is not necessary:
-            # if (max_safe.present & max_safe.rnd <= r) {
-                # max_safe.present := false;
-            # }
         }
 
         export action update_max_safe(b:blocking, r:round, v:value) = {
-            require max_safe.present -> max_safe.rnd <= r;
+            require max_safe.rnd <= r;
             require b_member(N,b) -> exists R . r <= R & heard_safe_at(N, R, v);
             call new_safe_val(r, v);
         }
