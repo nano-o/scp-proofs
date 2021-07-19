@@ -189,7 +189,7 @@ isolate protocol = {
         individual locked:bool
         individual last_vote:round_val_opt
         # the max (round,val) known safe:
-        individual max_safe:round_val_opt
+        individual max_safe:round_val_opt # TODO: option not needed; round can always be equal to max_all_safe
         # invariant: max_safe.val is safe at max_safe.rnd, i.e. no different value is choosable in a round r where r < max_safe.rnd
         # the max round below which all values are known safe:
         individual max_all_safe: round
@@ -197,8 +197,8 @@ isolate protocol = {
         individual decision:value
         relation prepared(N:node,V:value) # who prepared what in the current round
         relation voted(N:node,V:value) # who voted for what in the current round
-        relation highest_safe_at(N:node, R:round, V:value) # highest value a node reported safe at; this contains at most one entry per node
-        relation highest_all_safe(N:node, R:round) # highest all_safe report by a node; this contains at most one entry per node
+        relation heard_safe_at(N:node, R:round, V:value) # highest value a node reported safe at; this contains at most one entry per node
+        relation heard_all_safe(N:node, R:round) # highest all_safe report by a node; this contains at most one entry per node
 
         # for use when proposing:
         relation joined(N:node) # who joined the current round
@@ -214,8 +214,8 @@ isolate protocol = {
             max_safe.present := false;
             max_all_safe := 0;
             locked := false;
-            highest_safe_at(N,R,V) := false;
-            highest_all_safe(N,R) := false;
+            heard_safe_at(N,R,V) := false;
+            heard_all_safe(N,R) := false;
         }
 
         # a leader starts a new round:
@@ -280,7 +280,26 @@ isolate protocol = {
             }
         }
 
-        action update_max_safe(r:round, v:value) = {
+        relation safe_at_(R:round, V:value)
+        action new_safe_val(r:round, v:value) = {
+            # here we update max_safe and max_all_safe knowing that v is safe at r
+            safe_at_(R,V) := *; # havoc
+            # now we assume that safe_at_ describes what's safe according to what the node knows:
+            assume R <= max_all_safe -> safe_at_(R,V);
+            assume max_safe.present & R <= max_safe.rnd & V = max_safe.val -> safe_at_(R,V);
+            assume R <= r -> safe_at_(R, v);
+            # then we set max_safe and max_all_safe accordingly
+            max_safe.val := *;
+            max_safe.rnd := *;
+            assume safe_at_(R,V) -> R <= max_safe.rnd;
+            assume safe_at_(max_safe.rnd,max_safe.val);
+            max_all_safe := *;
+            assume R <= max_all_safe -> safe_at_(R,V);
+            assume (forall V . safe_at_(R,V)) -> R <= max_all_safe;
+        }
+
+        action new_safe_val_imperative(r:round, v:value) = {
+            # imperative version of new_safe_val
             if (r > max_all_safe & (max_safe.present & r <= max_safe.rnd -> max_safe.val ~= v)) { # otherwise do nothing
                 if (max_safe.present) {
                     if (r <= max_safe.rnd) {
@@ -315,6 +334,28 @@ isolate protocol = {
         }
 
         implement shim.safe_at_handler.handle(m:msg) {
+            assert well_behaved(m.src) -> m.rv.present;
+            heard_safe_at(m.src, R, V) := R = m.rv.rnd & V = m.rv.val;
+        }
+
+        implement shim.all_safe_handler.handle(m:msg) {
+            heard_all_safe(m.src, R) := R = m.rnd;
+        }
+
+        export action update_max_all_safe(b:blocking, r:round, v:value) = {
+            require max_all_safe < r;
+            require b_member(N,b) -> exists R . r <= R & heard_all_safe(N, R);
+            max_all_safe := r;
+            # this is not necessary:
+            # if (max_safe.present & max_safe.rnd <= r) {
+                # max_safe.present := false;
+            # }
+        }
+
+        export action update_max_safe(b:blocking, r:round, v:value) = {
+            require max_safe.present -> max_safe.rnd <= r;
+            require b_member(N,b) -> exists R . r <= R & heard_safe_at(N, R, v);
+            call new_safe_val(r, v);
         }
 
         export action vote(v:value, q:quorum) = {
@@ -324,7 +365,7 @@ isolate protocol = {
             last_vote.present := true;
             last_vote.val := v;
             last_vote.rnd := rnd;
-            call update_max_safe(rnd, v);
+            call new_safe_val(rnd, v);
             # send vote message:
             var m:msg;
             m.kind := msg_kind.vote;
