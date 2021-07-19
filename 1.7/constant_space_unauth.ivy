@@ -156,23 +156,6 @@ isolate abstract_protol = {
 
 # Concrete protocol model
 
-# a round-value pair:
-object pair_t = {
-    type this = struct {
-        rnd : round,
-        val : value
-    }
-}
-
-# an optional round-value pair:
-object pair_opt_t = {
-    type this = struct {
-        present : bool,
-        rnd : round,
-        val : value
-    }
-}
-
 type msg
 
 object proposal_msg = {
@@ -204,7 +187,8 @@ object start_round_msg = {
         src : node,
         rnd : round,
         voted : bool,
-        last_vote : pair_t
+        last_vote_rnd : round,
+        last_vote_val : value
     }
 }
 
@@ -230,19 +214,22 @@ isolate protocol = {
         individual rnd:round # the current round of the node
         individual locked:bool
         individual voted:bool
-        individual last_vote:pair_t
-        # the max (round,val) known safe:
-        individual max_safe:pair_t
-        # invariant: max_safe.val is safe at max_safe.rnd, i.e. no different value is choosable in a round r where r < max_safe.rnd
+        individual last_vote_rnd:round
+        individual last_vote_val:value
+        individual max_safe_rnd:round
+        individual max_safe_val:value
+        # invariant: max_safe_val is safe at max_safe_rnd, i.e. no different value is choosable in a round r where r < max_safe_rnd
         # the max round below which all values are known safe:
         individual max_all_safe: round
+        invariant max_all_safe <= max_safe_rnd
         # invariant: no value is choosable at all in a round r where r < max_all_safe
-        # invariant: max_all_safe <= max_safe.rnd
         individual decision:value
         relation prepared(N:node,V:value) # who prepared what in the current round
         relation votes(N:node,V:value) # who voted for what in the current round
         relation heard_safe_at(N:node, R:round, V:value) # highest value a node reported safe at; this contains at most one entry per node
+        invariant heard_safe_at(N,R1,V1) & heard_safe_at(N,R2,V2) -> R1 = R2 & V1 = V2
         relation heard_all_safe(N:node, R:round) # highest all_safe report by a node; this contains at most one entry per node
+        invariant heard_all_safe(N,R1) & heard_all_safe(N,R2) -> R1 = R2
 
         # for use when proposing:
         relation joined(N:node) # who joined the current round
@@ -250,12 +237,12 @@ isolate protocol = {
 
         # just a shorthand:
         relation safe_at(R:round, V:value)
-        definition safe_at(r:round,v:value) = (max_safe.val = v & r <= max_safe.rnd) | r <= max_all_safe
+        definition safe_at(r:round,v:value) = (max_safe_val = v & r <= max_safe_rnd) | r <= max_all_safe
 
         after init {
             rnd := 0;
             voted := false;
-            max_safe.rnd := 0;
+            max_safe_rnd := 0;
             max_all_safe := 0;
             locked := false;
             heard_safe_at(N,R,V) := false;
@@ -270,21 +257,22 @@ isolate protocol = {
             votes(N,V) := false;
             if proposers.is_proposer(n,r) {
                 joined(N) := N = n;
-                highest_vote(N,R,V) := voted & N = n & V = last_vote.val & R = last_vote.rnd;
+                highest_vote(N,R,V) := voted & N = n & V = last_vote_val & R = last_vote_rnd;
             }
             else {
                 var m:start_round_msg;
                 m.src := n;
                 m.rnd := r;
                 m.voted := voted;
-                m.last_vote := last_vote;
+                m.last_vote_rnd := last_vote_rnd;
+                m.last_vote_val := last_vote_val;
             }
         }
 
         implement shim.start_round_handler.handle(m:start_round_msg) {
             if (m.rnd = rnd) {
                 joined(m.src) := true;
-                highest_vote(N,R,V) := highest_vote(N,R,V) | (m.voted & N = m.src & R = m.last_vote.rnd & V = m.last_vote.val);
+                highest_vote(N,R,V) := highest_vote(N,R,V) | (m.voted & N = m.src & R = m.last_vote_rnd & V = m.last_vote_val);
             }
         }
 
@@ -306,7 +294,7 @@ isolate protocol = {
         }
 
         implement shim.proposal_handler.handle(m:proposal_msg) {
-            if (m.rnd = rnd & (forall V. ~prepared(n,V)) & (locked -> last_vote.val = m.val)) {
+            if (m.rnd = rnd & (forall V. ~prepared(n,V)) & (locked -> last_vote_val = m.val)) {
                 prepared(n,m.val) := true;
                 var m2:prepare_msg;
                 m2.src := n;
@@ -329,10 +317,10 @@ isolate protocol = {
             # now we make sure that safe_at_ describes what's safe according to what the node knows:
             assume safe_at_(R,V) = safe_at(R,V) | (R <= r & V = v);
             # then we set max_safe and max_all_safe accordingly
-            max_safe.val := *; # this is non-deterministic choice
-            max_safe.rnd := *;
-            assume safe_at_(R,V) -> R <= max_safe.rnd; # max_safe.rnd is the max round at which we know a value is safe
-            assume safe_at_(max_safe.rnd,max_safe.val); # and max_safe.val is a corresponding value
+            max_safe_val := *; # this is non-deterministic choice
+            max_safe_rnd := *;
+            assume safe_at_(R,V) -> R <= max_safe_rnd; # max_safe_rnd is the max round at which we know a value is safe
+            assume safe_at_(max_safe_rnd,max_safe_val); # and max_safe_val is a corresponding value
             max_all_safe := *;
             assume R <= max_all_safe -> safe_at_(R,V);
             # now send msgs:
@@ -344,8 +332,8 @@ isolate protocol = {
             # send safe_at msg:
             var m2:safe_at_msg;
             m2.src := n;
-            m2.rnd := max_safe.rnd;
-            m2.val := max_safe.val;
+            m2.rnd := max_safe_rnd;
+            m2.val := max_safe_val;
             call shim.broadcast(n,m2);
         }
 
@@ -358,14 +346,17 @@ isolate protocol = {
             heard_all_safe(m.src, R) := R = m.rnd;
         }
 
-        export action update_max_all_safe(b:blocking, r:round, v:value) = {
+        export action update_max_all_safe(b:blocking, r:round) = {
             require max_all_safe < r;
             require b_member(N,b) -> exists R . r <= R & heard_all_safe(N, R);
             max_all_safe := r;
+            if (max_safe_rnd < max_all_safe) {
+                max_safe_rnd := max_all_safe
+            }
         }
 
         export action update_max_safe(b:blocking, r:round, v:value) = {
-            require max_safe.rnd <= r;
+            require max_safe_rnd <= r;
             require b_member(N,b) -> exists R . r <= R & heard_safe_at(N, R, v);
             call new_safe_val(r, v);
         }
@@ -375,8 +366,8 @@ isolate protocol = {
             locked := true;
             # update last_vote:
             voted := true;
-            last_vote.val := v;
-            last_vote.rnd := rnd;
+            last_vote_val := v;
+            last_vote_rnd := rnd;
             call new_safe_val(rnd, v);
             # send vote msg:
             var m:vote_msg;
@@ -396,7 +387,7 @@ isolate protocol = {
             decision := v;
         }
     }
-} with round, intersection_assumptions
+} with round, intersection_assumptions, shim
 
 isolate proposers = {
     # Each round has a unique proposer. In order to avoid a
@@ -462,24 +453,24 @@ trusted isolate shim = {
 
         # action new_safe_val_imperative(r:round, v:value) = {
             # # imperative version of new_safe_val
-            # if (r > max_all_safe & (max_all_safe < max_safe.rnd & r <= max_safe.rnd -> max_safe.val ~= v)) { # otherwise do nothing
-                # if (max_all_safe < max_safe.rnd) {
-                    # if (r <= max_safe.rnd) {
+            # if (r > max_all_safe & (max_all_safe < max_safe_rnd & r <= max_safe_rnd -> max_safe_val ~= v)) { # otherwise do nothing
+                # if (max_all_safe < max_safe_rnd) {
+                    # if (r <= max_safe_rnd) {
                         # max_all_safe := r;
                     # }
-                    # else if (max_safe.val ~= v) {
-                        # max_all_safe := max_safe.rnd;
-                        # max_safe.rnd := r;
-                        # max_safe.val := v;
+                    # else if (max_safe_val ~= v) {
+                        # max_all_safe := max_safe_rnd;
+                        # max_safe_rnd := r;
+                        # max_safe_val := v;
                     # }
                     # else {
-                        # max_safe.rnd := r;
-                        # max_safe.val := v;
+                        # max_safe_rnd := r;
+                        # max_safe_val := v;
                     # }
                 # }
                 # else {
-                    # max_safe.rnd := r;
-                    # max_safe.val := v;
+                    # max_safe_rnd := r;
+                    # max_safe_val := v;
                 # }
             # };
             # var m:msg;
@@ -490,7 +481,7 @@ trusted isolate shim = {
             # call shim.broadcast(n,m);
             # # send safe_at msg:
             # m.kind := msg_kind.safe_at;
-            # m.rnd := max_safe.rnd;
-            # m.val := max_safe.val;
+            # m.rnd := max_safe_rnd;
+            # m.val := max_safe_val;
             # call shim.broadcast(n,m);
         # }
