@@ -288,7 +288,14 @@ isolate protocol = {
         }
 
         relation safe_at_(R:round, V:value)
+        # TODO: do the following work?
+        relation new_safe_at(R:round, V:value, NR:round, NV:value)
+        definition new_safe_at(R:round, V:value, nr:round, nv:value) =
+            R <= max_all_safe
+        |   R <= max_safe.rnd & V = max_safe.val
+        |   R <= nr & V = nv
         action new_safe_val(r:round, v:value) = {
+            # TODO: try with new_safe_at
             # here we update max_safe and max_all_safe knowing that v is safe at r
             safe_at_(R,V) := *; # havoc
             # now we assume that safe_at_ describes what's safe according to what the node knows:
