@@ -250,7 +250,6 @@ object protocol = {
         # NOTE: at the moment, most of those are unused
 
         # A value unanimously voted prepared cannot be contradicted. We use this to prove that, in a long-enough ballot in which all intact nodes prepare the same value, all intact nodes confirm that value as committed (because, as per the invariant, its progress cannot be stopped by a contradicting accepted-committed value).
-        # NOTE: this is an interesting property of the protocol, i.e. the outcome becomes univalent as soon as a quorum unanimously prepares a value.
         invariant [inv1] (forall N . intact(N) -> voted_prepared(N,B,V)) & intact(N) & accepted_committed(N,B2,V2) & B2 < B -> V = V2
 
         # An accepted prepared value cannot be contradicted. We use this to prove that once an intact nodes confirms (b,v) as prepared, the cascade effect occurs (because (b,v) is never contradicted) and eventually all intact nodes confirm.
@@ -260,6 +259,7 @@ object protocol = {
 
         # once a quorum unanimously votes to commit a value, no intact node ever prepares a different value:
         invariant  is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & (forall N . intact(N) & member(N,Q) -> voted_committed(N,B,V)) & B2 > B & V2 ~= V -> forall N . intact(N) & member(N,Q) -> ~voted_prepared(N,B2,V2)
+        # NOTE: this is an interesting property of the protocol, i.e. the outcome becomes univalent as soon as a quorum unanimously votes to commit a value.
 
         # important invariant: a node does not prepare a value that contradicts a previous vote to commit unless that vote cannot reach quorum threshold
         invariant is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & intact(N1) & V1 ~= V2 & voted_prepared(N1,B2,V1) & B1 < B2 -> (~voted_committed(N1,B1,V2) | (exists N . intact(N) & member(N,Q) & left_ballot(N,B1) & ~voted_committed(N,B1,V2)))

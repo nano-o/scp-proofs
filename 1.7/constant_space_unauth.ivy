@@ -4,7 +4,12 @@
 include order
 
 instance node : iterable # nodes are a set with an order, that can be iterated over (see order.ivy in the standard library)
+
 type value
+individual v1:value
+individual v2:value
+axiom [at_least_two_values] v1 ~= v2
+
 instance round : unbounded_sequence # this establishes that rounds are totally ordered by < with least element 0
 type quorum
 type blocking # blocking sets
@@ -19,7 +24,7 @@ trusted isolate intersection_assumptions = {
     property exists N . well_behaved(N) & b_member(N,B) # every blocking set contains a well-behaved node
 }
 
-isolate abstract_protol = {
+isolate abstract_protocol = {
 
     relation left_round(N:node, R:round)
     # information about what is safe will propagate using a Bracha-like mechanism; this information is also strictly monotonic
@@ -63,20 +68,25 @@ isolate abstract_protol = {
         require q_member(N,q) -> prepared(N,r,v);
         votes(n, r, v) := true;
         locked(n, r, v) := true;
-        safe_at(n, r, v) := true;
-        all_safe(n, R) := all_safe(n, R) | (R < r & exists V . safe_at(n,R,V) & V ~= v);
+        call update_safe_at(n, r, v);
         left_round(n, R) := R < r;
+    }
+
+    action update_safe_at(n:node, r:round, v:value) = {
+        safe_at(n, R, V) := safe_at(n, R, V) | (R <= r & V = v);
+        safe_at(n, R, V) := safe_at(n, R, V) | exists V1,V2 . V1 ~= V2 & safe_at(n,R,V1) & safe_at(n, R, V2);
+        all_safe(n, R) := forall V . safe_at(n,R,V);
     }
 
     export action relay_safe_at(n:node, r:round, v:value, b:blocking) = {
         require b_member(N,b) -> exists R . R >= r & safe_at(n,R,v);
-        safe_at(n,r,v) := true;
-        all_safe(n, R) := all_safe(n, R) | (exists V . safe_at(n,R,V) & R < r & V ~= v);
+        call update_safe_at(n,r,v);
     }
 
     export action relay_all_safe(n:node, r:round, b:blocking) = {
         require b_member(N,b) -> exists R . R >= r & all_safe(n,R);
         all_safe(n,r) := true;
+        safe_at(n,R,V) := safe_at(n,R,V) | R <= r;
     }
 
     export action unlock(n:node, r:round, v:value) = {
@@ -107,7 +117,7 @@ isolate abstract_protol = {
 
     # the agreement property:
     # #####################
-    invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
+    # invariant [safety] ( well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2)) -> V1 = V2
 
     # notion of choosable and safe at:
     ##################################
@@ -120,6 +130,7 @@ isolate abstract_protol = {
     invariant well_behaved(N) & all_safe(N, R2) -> forall R1,V1 . R1 < R2 -> ~choosable(R1,V1)
     # NOTE: the following is not equivalent to the above if there's only one value...
     # invariant well_behaved(N) & all_safe(N, R) -> forall V. is_safe_at(R,V)
+
     # NOTE: all_safe can just be inferred from safe_at:
     relation all_safe_2(N:node,R:round)
     definition all_safe_2(N,R1) = exists V1,R2,V2 . safe_at(N,R1,V1) & V1 ~= V2 & R1 < R2 & safe_at(N,R2,V2)
@@ -152,7 +163,7 @@ isolate abstract_protol = {
     invariant well_behaved(N) & prepared(N,R2,V2) & R1 < R2 -> left_round(N,R1)
     invariant well_behaved(N) & votes(N,R2,V2) & R1 < R2 -> left_round(N,R1)
 
-} with round, intersection_assumptions
+} with round, intersection_assumptions, at_least_two_values
 
 # Concrete protocol model
 
@@ -449,39 +460,3 @@ trusted isolate shim = {
         }
     }
 }
-
-
-        # action new_safe_val_imperative(r:round, v:value) = {
-            # # imperative version of new_safe_val
-            # if (r > max_all_safe & (max_all_safe < max_safe_rnd & r <= max_safe_rnd -> max_safe_val ~= v)) { # otherwise do nothing
-                # if (max_all_safe < max_safe_rnd) {
-                    # if (r <= max_safe_rnd) {
-                        # max_all_safe := r;
-                    # }
-                    # else if (max_safe_val ~= v) {
-                        # max_all_safe := max_safe_rnd;
-                        # max_safe_rnd := r;
-                        # max_safe_val := v;
-                    # }
-                    # else {
-                        # max_safe_rnd := r;
-                        # max_safe_val := v;
-                    # }
-                # }
-                # else {
-                    # max_safe_rnd := r;
-                    # max_safe_val := v;
-                # }
-            # };
-            # var m:msg;
-            # m.src := n;
-            # # send all_safe msg:
-            # m.kind := msg_kind.all_safe;
-            # m.rnd := max_all_safe;
-            # call shim.broadcast(n,m);
-            # # send safe_at msg:
-            # m.kind := msg_kind.safe_at;
-            # m.rnd := max_safe_rnd;
-            # m.val := max_safe_val;
-            # call shim.broadcast(n,m);
-        # }
