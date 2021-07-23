@@ -10,7 +10,7 @@ type value
 # individual v2:value
 # axiom [at_least_two_values] v1 ~= v2
 
-instance counter : unbounded_sequence # this establishes that rounds are totally ordered by < with least element 0
+instance counter_t : unbounded_sequence # this establishes that rounds are totally ordered by < with least element 0
 # TODO: what about the infinity counter?
 type quorum
 type blocking # blocking sets
@@ -29,7 +29,7 @@ type msg
 
 object ballot_t = {
     type this = struct {
-        cnt : counter,
+        cnt : counter_t,
         val : value
     }
 }
@@ -37,29 +37,35 @@ object ballot_t = {
 object ballot_opt_t = {
     type this = struct {
         present : bool,
-        cnt : counter,
+        cnt : counter_t,
         val : value
     }
 }
 
 object prepare_message = {
-    ballot : ballot_t,
-    prepared : ballot_opt_t,
-    aCounter : counter,
-    hCounter : counter,
-    cCounter : counter
+    type this = struct {
+        ballot : ballot_t,
+        prepared : ballot_opt_t,
+        aCounter : counter_t,
+        hCounter : counter_t,
+        cCounter : counter_t
+    }
 }
 
 object commit_message = {
-    ballot : ballot_t,
-    preparedCounter : counter,
-    hCounter : counter,
-    cCounter : counter
+    type this = struct {
+        ballot : ballot_t,
+        preparedCounter : counter_t,
+        hCounter : counter_t,
+        cCounter : counter_t
+    }
 }
 
 object externalize_message = {
-    commit : ballot,
-    hCounter : counter
+    type this = struct {
+        commit : ballot_t,
+        hCounter : counter_t
+    }
 }
 
 object phase_t = {
@@ -69,22 +75,53 @@ object phase_t = {
 # relation leq(B1:ballot_t, B2:ballot_t)
 # definition leq(b1:ballot_t, b2:ballot_t) = b1.cnt < b2.cnt | (b1.cnt = b2.cnt & 
 
+isolate protocol_interface = {
+    action nomination_update(n:node)
+    action decide(n:node, v:value)
+    specification {
+        individual decided:bool
+        individual decision:value
+        after init {
+            decided := false;
+        }
+        before decide {
+            require decided -> decision = v;
+            decision := v;
+        }
+    }
+}
+
+# we do not specify nomination at this point and instead we just export this action to the environment (which means it is called nondeterministically):
+export action nomination_update
+
 isolate protocol = {
 
     # note that counter 0 is special in that it is used as a flag indicating the absence of someting; no value can be commited with counter 0.
 
     object server(n:node) = {
+        individual nominated : bool # whether some value has been nominated
+        individual combined_val : value # the value obtained by combining all confirmed-nomiated transactions
         individual ballot : ballot_t
         individual phase : phase_t
         individual max_accepted_prepared : ballot_t
         individual max_confirmed_prepared: ballot_t
         invariant max_accepted_prepared.cnt <= ballot.cnt
-        individual aborted_counter : counter # all ballots below are aborted
+        individual aborted_counter : counter_t # all ballots below are aborted
         invariant aborted_counter <= max_accepted_prepared.cnt & max_accepted_prepared.cnt <= ballot.cnt
-        individual min_accepted_committed: counter
-        individual max_accepted_committed: counter
-        individual min_confirmed_committed: ballot
-        individual max_confirmed_committed: counter
+        individual min_accepted_committed: counter_t
+        individual max_accepted_committed: counter_t
+        individual min_confirmed_committed: ballot_t
+        individual max_confirmed_committed: counter_t
+
+        after init {
+            nominated := false;
+        }
+
+        implement protocol_interface.nomination_update {
+            nominated := true;
+            combined_val := *; # this is non-deterministic choice
+        }
+
     }
 
 }
