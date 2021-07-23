@@ -49,11 +49,14 @@ isolate abstract_protocol = {
         left_round(n,R) := R < r;
     }
 
+    relation temp(N:node, R:round, V:value) # we'll use this as a temporary variable
+    relation temp_2(N:node, R:round, V:value) # we'll use this as a temporary variable
+
     relation claims_safe_at(N:node, R:round, V:value)
     definition claims_safe_at(N:node, r:round, v:value) =
         exists R1 . R1 >= r & (
-                vote_3(N,R1,v)
-            |   exists R2,V1,V2 . R1 < R2 & vote_3(N,R1,V1) & vote_3(N,R2,V2) & V1 ~= V1 # everything is safe at R1
+                temp(N,R1,v)
+            |   exists R2,V1,V2 . R1 < R2 & temp(N,R1,V1) & temp(N,R2,V2) & V1 ~= V1 # everything is safe at R1
         )
     # NOTE: we only need two things to compute claims_safe_at: the highest vote_3 round and value, and the second highest vote_3 round
 
@@ -61,14 +64,22 @@ isolate abstract_protocol = {
     definition shows_safe_at(r1:round, r2:round, v:value, q:quorum, b:blocking) =
             r1 < r2
         &   (forall N . b_member(N,b) -> claims_safe_at(N,r1,v)) # by induction , well-behaved nodes claim true things, so v is safe at r1
-        &   (forall N,V . q_member(N,q) & vote(N,r1,V) -> V = v) # only v voted for at r1, if any, among q
-        &   (forall N,R,V . q_member(N,q) & r1 < R & R < r2 -> ~vote(N,R,V)) # no vote among q after r1
+        &   (forall N,V . q_member(N,q) & temp_2(N,r1,V) -> V = v) # only v voted for at r1, if any, among q
+        &   (forall N,R,V . q_member(N,q) & r1 < R & R < r2 -> ~temp_2(N,R,V)) # no vote among q after r1
 
     export action do_vote_3(n:node, r:round, v:value) = {
-        require ~vote_3(n,r,V) & ~left_round(N,r);
+        require ~vote_3(n,r,V) & ~left_round(n,r);
+        # non-leaders use vote_3 and vote to determine what is safe:
+        temp(N,R,V) := *; # non-deterministic choice
+        assume temp(N,R,V) = vote_3(N,R,V);
+        temp_2(N,R,V) := *; # non-deterministic choice
+        assume temp_2(N,R,V) = vote(N,R,V);
         require exists R,Q,B . shows_safe_at(R, r, v, Q, B);
         vote_3(n, r, v) := true;
         left_round(n, R) := R < r;
+    }
+
+    export action do_vote_2(n:node, r:round, v:value) = {
     }
 
     # export action vote(n:node, r:round, v:value, q:quorum) = {
