@@ -1,0 +1,90 @@
+#lang ivy1.7
+
+# We start with the domain model (nodes, rounds, values, quorums, blocking sets, etc.)
+include order
+
+instance node : iterable # nodes are a set with an order, that can be iterated over (see order.ivy in the standard library)
+
+type value
+# individual v1:value
+# individual v2:value
+# axiom [at_least_two_values] v1 ~= v2
+
+instance counter : unbounded_sequence # this establishes that rounds are totally ordered by < with least element 0
+# TODO: what about the infinity counter?
+type quorum
+type blocking # blocking sets
+
+relation well_behaved(N:node) # NOTE: Use only in the proof! Nodes do know know that.
+
+relation q_member(N:node, Q:quorum) # membership relation
+relation b_member(N:node, B:blocking) # membership relation
+
+trusted isolate intersection_assumptions = {
+    property exists N. well_behaved(N) & q_member(N, Q1) & q_member(N, Q2) # every two quorums have a well-behaved node in common
+    property exists N . well_behaved(N) & b_member(N,B) # every blocking set contains a well-behaved node
+}
+
+type msg
+
+object ballot_t = {
+    type this = struct {
+        cnt : counter,
+        val : value
+    }
+}
+
+object ballot_opt_t = {
+    type this = struct {
+        present : bool,
+        cnt : counter,
+        val : value
+    }
+}
+
+object prepare_message = {
+    ballot : ballot_t,
+    prepared : ballot_opt_t,
+    aCounter : counter,
+    hCounter : counter,
+    cCounter : counter
+}
+
+object commit_message = {
+    ballot : ballot_t,
+    preparedCounter : counter,
+    hCounter : counter,
+    cCounter : counter
+}
+
+object externalize_message = {
+    commit : ballot,
+    hCounter : counter
+}
+
+object phase_t = {
+    type this = {prepare, commit, externalize}
+}
+
+# relation leq(B1:ballot_t, B2:ballot_t)
+# definition leq(b1:ballot_t, b2:ballot_t) = b1.cnt < b2.cnt | (b1.cnt = b2.cnt & 
+
+isolate protocol = {
+
+    # note that counter 0 is special in that it is used as a flag indicating the absence of someting; no value can be commited with counter 0.
+
+    object server(n:node) = {
+        individual ballot : ballot_t
+        individual phase : phase_t
+        individual max_accepted_prepared : ballot_t
+        individual max_confirmed_prepared: ballot_t
+        invariant max_accepted_prepared.cnt <= ballot.cnt
+        individual aborted_counter : counter # all ballots below are aborted
+        invariant aborted_counter <= max_accepted_prepared.cnt & max_accepted_prepared.cnt <= ballot.cnt
+        individual min_accepted_committed: counter
+        individual max_accepted_committed: counter
+        individual min_confirmed_committed: ballot
+        individual max_confirmed_committed: counter
+    }
+
+}
