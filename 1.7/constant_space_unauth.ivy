@@ -28,17 +28,17 @@ isolate abstract_protocol = {
 
     relation left_round(N:node, R:round)
     relation proposal(R:round, V:value)
-    relation vote_3(N:node, R:round, V:value)
-    relation vote_2(N:node, R:round, V:value)
-    relation vote_1(N:node, R:round, V:value)
+    relation key_1(N:node, R:round, V:value)
+    relation key_2(N:node, R:round, V:value)
+    relation key_3(N:node, R:round, V:value)
     relation vote(N:node, R:round, V:value)
     relation decided(N:node, R:round, V:value)
 
     after init {
         proposal(R,V) := false;
-        vote_3(N,R,V) := false;
-        vote_2(N,R,V) := false;
-        vote_1(N,R,V) := false;
+        key_1(N,R,V) := false;
+        key_2(N,R,V) := false;
+        key_3(N,R,V) := false;
         vote(N,R,V) := false;
         decided(N,R,V) := false;
         left_round(N,R) := false;
@@ -54,7 +54,7 @@ isolate abstract_protocol = {
 
     relation claims_safe_at(N:node, R:round, V:value)
     definition claims_safe_at(N:node, r:round, v:value) =
-        exists R1 . R1 >= r & (
+        exists R1 . R1 >= r & ( # temp is e.g. a copy of key_1
                 temp(N,R1,v)
             |   exists R2,V1,V2 . R1 < R2 & temp(N,R1,V1) & temp(N,R2,V2) & V1 ~= V1 # everything is safe at R1
         )
@@ -62,45 +62,47 @@ isolate abstract_protocol = {
 
     relation shows_safe_at(R1:round, R2:round, V:value, Q:quorum, B:blocking)
     definition shows_safe_at(r1:round, r2:round, v:value, q:quorum, b:blocking) =
-        (forall N . q_member(N,q) -> left_round(N,r2))
+        # q and b show that v is safe at r2, meaning nothing but v is choosable at a round r such that r < r2
+        # r1 is the max round r1 < r2 in which q voted, if any
+        (forall N,R . q_member(N,q) & R < r2 -> left_round(N,r2))
     &
         (
             (       r1 < r2
-                &   (forall N . b_member(N,b) -> claims_safe_at(N,r1,v)) # by induction , well-behaved nodes claim true things, so v is safe at r1
+                &   (forall N . b_member(N,b) -> claims_safe_at(N,r1,v)) # v is safe at r1
                 &   (forall N,V . q_member(N,q) & temp_2(N,r1,V) -> V = v) # only v voted for at r1, if any, among q
                 &   (forall N,R,V . q_member(N,q) & r1 < R & R < r2 -> ~temp_2(N,R,V)) ) # no vote among q after r1
         |
-            (   forall N,R,V . q_member(N,q) & R <= r2 -> ~temp_2(N,R,V) ) ) # nobody ever voted
+            (   forall N,R,V . q_member(N,q) & R < r2 -> ~temp_2(N,R,V) ) ) # nobody ever voted before r2
 
-    export action do_vote_3(n:node, r:round, v:value) = {
-        require ~vote_3(n,r,V) & ~left_round(n,r);
-        # non-leaders use vote_3 and vote to determine what is safe:
+    export action do_key_1(n:node, r:round, v:value) = {
+        require ~key_1(n,r,V) & ~left_round(n,r);
+        # non-leaders use key_1 and vote to determine what is safe:
         temp(N,R,V) := *; # non-deterministic choice
-        assume temp(N,R,V) = vote_3(N,R,V);
+        assume temp(N,R,V) = key_1(N,R,V);
         temp_2(N,R,V) := *; # non-deterministic choice
         assume temp_2(N,R,V) = vote(N,R,V);
         require exists R,Q,B . shows_safe_at(R, r, v, Q, B);
-        vote_3(n, r, v) := true;
+        key_1(n, r, v) := true;
         left_round(n, R) := R < r;
     }
 
-    export action do_vote_2(n:node, r:round, v:value) = {
-        require ~vote_2(n,r,V) & ~left_round(n,r);
-        require exists Q . q_member(N,Q) -> vote_3(N,r,v);
-        vote_2(n, r, v) := true;
+    export action do_key_2(n:node, r:round, v:value) = {
+        require ~key_2(n,r,V) & ~left_round(n,r);
+        require exists Q . q_member(N,Q) -> key_1(N,r,v);
+        key_2(n, r, v) := true;
         left_round(n, R) := R < r;
     }
 
-    export action do_vote_1(n:node, r:round, v:value) = {
-        require ~vote_1(n,r,V) & ~left_round(n,r);
-        require exists Q . q_member(N,Q) -> vote_2(N,r,v);
-        vote_1(n, r, v) := true;
+    export action do_key_3(n:node, r:round, v:value) = {
+        require ~key_3(n,r,V) & ~left_round(n,r);
+        require exists Q . q_member(N,Q) -> key_2(N,r,v);
+        key_3(n, r, v) := true;
         left_round(n, R) := R < r;
     }
 
     export action do_vote(n:node, r:round, v:value) = {
         require ~vote(n,r,V) & ~left_round(n,r);
-        require exists Q . q_member(N,Q) -> vote_1(N,r,v);
+        require exists Q . q_member(N,Q) -> key_3(N,r,v);
         vote(n, r, v) := true;
         left_round(n, R) := R < r;
     }
@@ -111,11 +113,11 @@ isolate abstract_protocol = {
     }
 
     export action propose(r:round, v:value, q:quorum, r1:round) = {
-        # leaders use vote_2 and vote_1 to determine what is safe:
+        # leaders use key_2 and key_3 to determine what is safe:
         temp(N,R,V) := *; # non-deterministic choice
-        assume temp(N,R,V) = vote_2(N,R,V);
+        assume temp(N,R,V) = key_2(N,R,V);
         temp_2(N,R,V) := *; # non-deterministic choice
-        assume temp_2(N,R,V) = vote_1(N,R,V);
+        assume temp_2(N,R,V) = key_3(N,R,V);
         require exists R,Q,B . shows_safe_at(R, r, v, Q, B);
         proposal(r,v) := true;
         assert safe_at(r,v);
@@ -142,15 +144,15 @@ isolate abstract_protocol = {
         # apply thm1
     # }
 
-    invariant well_behaved(N) & vote_3(N,R,V) -> safe_at(R,V)
-    invariant well_behaved(N) & vote_2(N,R,V) -> safe_at(R,V)
-    invariant well_behaved(N) & vote_1(N,R,V) -> safe_at(R,V)
+    invariant well_behaved(N) & key_1(N,R,V) -> safe_at(R,V)
+    invariant well_behaved(N) & key_2(N,R,V) -> safe_at(R,V)
+    invariant well_behaved(N) & key_3(N,R,V) -> safe_at(R,V)
     invariant well_behaved(N) & vote(N,R,V) -> safe_at(R,V)
 
     invariant (exists N1 . well_behaved(N1) & decided(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> vote(N2,R,V)
-    invariant (exists N1 . well_behaved(N1) & vote(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> vote_1(N2,R,V)
-    invariant (exists N1 . well_behaved(N1) & vote_1(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> vote_2(N2,R,V)
-    invariant (exists N1 . well_behaved(N1) & vote_2(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> vote_3(N2,R,V)
+    invariant (exists N1 . well_behaved(N1) & vote(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> key_3(N2,R,V)
+    invariant (exists N1 . well_behaved(N1) & key_3(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> key_2(N2,R,V)
+    invariant (exists N1 . well_behaved(N1) & key_2(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> key_1(N2,R,V)
 
     # now, supporting invariants:
     #############################
@@ -159,14 +161,14 @@ isolate abstract_protocol = {
     invariant well_behaved(N) & left_round(N,R2) & R1 < R2 -> left_round(N,R1)
 
     # nodes stop preparing or committing in lower rounds when doing so in a higher round:
-    invariant well_behaved(N) & vote_3(N,R2,V2) & R1 < R2 -> left_round(N,R1)
-    invariant well_behaved(N) & vote_2(N,R2,V2) & R1 < R2 -> left_round(N,R1)
-    invariant well_behaved(N) & vote_1(N,R2,V2) & R1 < R2 -> left_round(N,R1)
+    invariant well_behaved(N) & key_1(N,R2,V2) & R1 < R2 -> left_round(N,R1)
+    invariant well_behaved(N) & key_2(N,R2,V2) & R1 < R2 -> left_round(N,R1)
+    invariant well_behaved(N) & key_3(N,R2,V2) & R1 < R2 -> left_round(N,R1)
     invariant well_behaved(N) & vote(N,R2,V2) & R1 < R2 -> left_round(N,R1)
 
-    invariant well_behaved(N) & vote_3(N,R,V) & vote_3(N,R,V2) -> V = V2
-    invariant well_behaved(N) & vote_2(N,R,V) & vote_2(N,R,V2) -> V = V2
-    invariant well_behaved(N) & vote_1(N,R,V) & vote_1(N,R,V2) -> V = V2
+    invariant well_behaved(N) & key_1(N,R,V) & key_1(N,R,V2) -> V = V2
+    invariant well_behaved(N) & key_2(N,R,V) & key_2(N,R,V2) -> V = V2
+    invariant well_behaved(N) & key_3(N,R,V) & key_3(N,R,V2) -> V = V2
     invariant well_behaved(N) & vote(N,R,V) & vote(N,R,V2) -> V = V2
 
 
