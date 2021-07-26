@@ -1,4 +1,5 @@
 #lang ivy1.7
+# check with ivy_check isolate=abstract_protocol seed=$RANDOM complete=fo constant_space_unauth.ivy
 
 # We start with the domain model (nodes, rounds, values, quorums, blocking sets, etc.)
 include order
@@ -6,15 +7,12 @@ include order
 instance node : iterable # nodes are a set with an order, that can be iterated over (see order.ivy in the standard library)
 
 type value
-individual v1:value
-individual v2:value
-axiom [at_least_two_values] v1 ~= v2
 
 instance round : unbounded_sequence # this establishes that rounds are totally ordered by < with least element 0
 type quorum
 type blocking # blocking sets
 
-relation well_behaved(N:node) # NOTE: Use only in the proof! Nodes do know know that.
+relation well_behaved(N:node) # NOTE: Use only in the proof! Nodes do not know that.
 
 relation q_member(N:node, Q:quorum) # membership relation
 relation b_member(N:node, B:blocking) # membership relation
@@ -77,10 +75,8 @@ isolate abstract_protocol = {
     export action do_key_1(n:node, r:round, v:value) = {
         require ~key_1(n,r,V) & ~left_round(n,r);
         # non-leaders use key_1 and vote to determine what is safe:
-        temp(N,R,V) := *; # non-deterministic choice
-        assume temp(N,R,V) = key_1(N,R,V);
-        temp_2(N,R,V) := *; # non-deterministic choice
-        assume temp_2(N,R,V) = vote(N,R,V);
+        temp(N,R,V) := key_1(N,R,V);
+        temp_2(N,R,V) := vote(N,R,V);
         require exists R,Q,B . shows_safe_at(R, r, v, Q, B);
         key_1(n, r, v) := true;
         left_round(n, R) := R < r;
@@ -114,10 +110,8 @@ isolate abstract_protocol = {
 
     export action propose(r:round, v:value, q:quorum, r1:round) = {
         # leaders use key_2 and key_3 to determine what is safe:
-        temp(N,R,V) := *; # non-deterministic choice
-        assume temp(N,R,V) = key_2(N,R,V);
-        temp_2(N,R,V) := *; # non-deterministic choice
-        assume temp_2(N,R,V) = key_3(N,R,V);
+        temp(N,R,V) := key_2(N,R,V);
+        temp_2(N,R,V) := key_3(N,R,V);
         require exists R,Q,B . shows_safe_at(R, r, v, Q, B);
         proposal(r,v) := true;
         assert safe_at(r,v);
@@ -130,26 +124,15 @@ isolate abstract_protocol = {
     relation safe_at(R:round, V:value)
     definition [safe_at_def] safe_at(R2,V2) = forall R1,V1 . R1 < R2 & V1 ~= V2 -> ~choosable(R1,V1)
 
-    # theorem [thm1] {
-        # property forall N,R,V . well_behaved(N) & vote(N,R,V) -> safe_at(R,V)
-        # property forall R,V . (exists N1 . well_behaved(N1) & decided(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> vote(N2,R,V)
-        # property forall N,R,V1,V2 . well_behaved(N) & vote(N,R,V1) & vote(N,R,V2) -> V1 = V2
-        # property well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2) -> V1 = V2
-    # }
-
     # the agreement property:
     # #####################
     invariant [safety] well_behaved(N1) & well_behaved(N2) & decided(N1,R1,V1) & decided(N2,R2,V2) -> V1 = V2
-    # proof {
-        # apply thm1
-    # }
 
     invariant well_behaved(N) & key_1(N,R,V) -> safe_at(R,V)
     invariant well_behaved(N) & key_2(N,R,V) -> safe_at(R,V)
     invariant well_behaved(N) & key_3(N,R,V) -> safe_at(R,V)
     invariant well_behaved(N) & vote(N,R,V) -> safe_at(R,V)
-
-    invariant (exists N1 . well_behaved(N1) & decided(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> vote(N2,R,V)
+invariant (exists N1 . well_behaved(N1) & decided(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> vote(N2,R,V)
     invariant (exists N1 . well_behaved(N1) & vote(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> key_3(N2,R,V)
     invariant (exists N1 . well_behaved(N1) & key_3(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> key_2(N2,R,V)
     invariant (exists N1 . well_behaved(N1) & key_2(N1,R,V)) -> exists Q. forall N2. well_behaved(N2) & q_member(N2, Q) -> key_1(N2,R,V)
@@ -172,10 +155,22 @@ isolate abstract_protocol = {
     invariant well_behaved(N) & vote(N,R,V) & vote(N,R,V2) -> V = V2
 
 
-} with round, intersection_assumptions#, at_least_two_values
+} with round, intersection_assumptions
 
 # Concrete protocol model
-# TODO: nothing below has been updated
+
+object pair_opt_t = {
+    type this
+    individual rnd : round
+    individual val : value
+    individual present: bool
+}
+
+object round_opt_t = {
+    type this
+    individual rnd : round
+    individual present: bool
+}
 
 type msg
 
@@ -187,7 +182,41 @@ object proposal_msg = {
     }
 }
 
-object prepare_msg = {
+object suggest_msg = {
+    variant this of msg = struct {
+        src : node,
+        key_2 : pair_opt_t,
+        prev_key2 : round_opt_t,
+        key3 : pair_opt_t,
+        val : value
+    }
+}
+
+object proof_msg = {
+    variant this of msg = struct {
+        src : node,
+        vote : pair_opt_t,
+        key1 : pair_opt_t
+    }
+}
+
+object key_1_msg = {
+    variant this of msg = struct {
+        src : node,
+        rnd : round,
+        val : value
+    }
+}
+
+object key_2_msg = {
+    variant this of msg = struct {
+        src : node,
+        rnd : round,
+        val : value
+    }
+}
+
+object key_3_msg = {
     variant this of msg = struct {
         src : node,
         rnd : round,
@@ -203,210 +232,216 @@ object vote_msg = {
     }
 }
 
-object start_round_msg = {
-    variant this of msg = struct {
-        src : node,
-        rnd : round,
-        voted : bool,
-        last_vote_rnd : round,
-        last_vote_val : value
-    }
-}
-
-object all_safe_msg = {
-    variant this of msg = struct {
-        src : node,
-        rnd : round
-    }
-}
-
-object safe_at_msg = {
-    variant this of msg = struct {
-        src : node,
-        rnd : round,
-        val : value
-    }
-}
+type phase_t = {suggest_phase, key_1_phase, key_2_phase, key_3_phase, vote_phase}
 
 isolate protocol = {
 
     object server(n:node) = {
 
-        individual rnd:round # the current round of the node
-        individual locked:bool
-        individual voted:bool
-        individual last_vote_rnd:round
-        individual last_vote_val:value
-        individual max_safe_rnd:round
-        individual max_safe_val:value
-        # invariant: max_safe_val is safe at max_safe_rnd, i.e. no different value is choosable in a round r where r < max_safe_rnd
-        # the max round below which all values are known safe:
-        individual max_all_safe: round
-        invariant max_all_safe <= max_safe_rnd
-        # invariant: no value is choosable at all in a round r where r < max_all_safe
+        # NOTE: there seem to be a bug in Ivy which prevents us from using struct types here so we flatten them out
+
+        individual rnd: round # the current round of the node
+        individual phase: phase_t
+
+        individual vote: pair_opt_t
+        individual key_3: pair_opt_t
+        individual key_2: pair_opt_t
+        individual prev_key_2: round_opt_t
+        individual key_1: pair_opt_t
+        individual prev_key_1: round_opt_t
+
+        individual decided: bool
         individual decision:value
-        relation prepared(N:node,V:value) # who prepared what in the current round
-        relation votes(N:node,V:value) # who voted for what in the current round
-        relation heard_safe_at(N:node, R:round, V:value) # highest value a node reported safe at; this contains at most one entry per node
-        invariant heard_safe_at(N,R1,V1) & heard_safe_at(N,R2,V2) -> R1 = R2 & V1 = V2
-        relation heard_all_safe(N:node, R:round) # highest all_safe report by a node; this contains at most one entry per node
-        invariant heard_all_safe(N,R1) & heard_all_safe(N,R2) -> R1 = R2
 
-        # for use when proposing:
+        # state used to progress through phases:
+        relation key_3s(N:node,V:value) # key_3 msgs received in the current round
+        relation key_2s(N:node,V:value) # key_2 msgs received in the current round
+        relation key_1s(N:node,V:value) # key_1 msgs received in the current round
+        relation votes(N:node,V:value) # vote msgs received in the current round
+
+        # state used by a leader to pick a proposal:
         relation joined(N:node) # who joined the current round
-        relation highest_vote(N:node, R:round, V:value) # highest votes as reported in join msgs; this contains at most on entry per node
+        relation highest_vote(N:node, R:round, V:value) # highest votes
+        relation highest_key_2(N:node, R:round, V:value)
+        relation highest_prev_key_2(N:node, R:round)
 
-        # just a shorthand:
-        relation safe_at(R:round, V:value)
-        definition safe_at(r:round,v:value) = (max_safe_val = v & r <= max_safe_rnd) | r <= max_all_safe
+        # state used by a non-leader leader to determine what values are safe the current round:
+        relation highest_key_1(N:node, R:round, V:value)
+        relation highest_prev_key_1(N:node, R:round)
+
 
         after init {
+            # call reset_round_state; TODO: BUG: seems we can't call anything in init
             rnd := 0;
-            voted := false;
-            max_safe_rnd := 0;
-            max_all_safe := 0;
-            locked := false;
-            heard_safe_at(N,R,V) := false;
-            heard_all_safe(N,R) := false;
+            vote.present := false;
+            key_3.present := false;
+            key_2.present := false;
+            key_1.present := false;
+            decided := false;
+            phase := suggest_phase;
+            key_3s(N,V) := false;
+            key_2s(N,V) := false;
+            key_1s(N,V) := false;
+            votes(N,V) := false;
+            joined(N) := false;
+            highest_vote(N,R,V) := false;
+            highest_key_2(N,R,V) := false;
+            highest_prev_key_2(N,R) := false;
+            highest_key_1(N,R,V) := false;
+            highest_prev_key_1(N,R) := false;
+        }
+
+        action reset_round_state = {
+            phase := suggest_phase;
+            key_3s(N,V) := false;
+            key_2s(N,V) := false;
+            key_1s(N,V) := false;
+            votes(N,V) := false;
+            joined(N) := false;
+            highest_vote(N,R,V) := false;
+            highest_key_2(N,R,V) := false;
+            highest_prev_key_2(N,R) := false;
+            highest_key_1(N,R,V) := false;
+            highest_prev_key_1(N,R) := false;
         }
 
         # a leader starts a new round:
         export action start_round(r:round) = {
             require r > rnd;
             rnd := r;
-            prepared(N,V) := false;
-            votes(N,V) := false;
+
+            call reset_round_state;
+
             if proposers.is_proposer(n,r) {
                 joined(N) := N = n;
-                highest_vote(N,R,V) := voted & N = n & V = last_vote_val & R = last_vote_rnd;
             }
             else {
-                var m:start_round_msg;
-                m.src := n;
-                m.rnd := r;
-                m.voted := voted;
-                m.last_vote_rnd := last_vote_rnd;
-                m.last_vote_val := last_vote_val;
+                # var m:start_round_msg;
+                # m.src := n;
+                # m.rnd := r;
+                # m.voted := voted;
+                # m.last_vote_rnd := last_vote_rnd;
+                # m.last_vote_val := last_vote_val;
             }
         }
 
-        implement shim.start_round_handler.handle(m:start_round_msg) {
-            if (m.rnd = rnd) {
-                joined(m.src) := true;
-                highest_vote(N,R,V) := highest_vote(N,R,V) | (m.voted & N = m.src & R = m.last_vote_rnd & V = m.last_vote_val);
-            }
-        }
+        # implement shim.start_round_handler.handle(m:start_round_msg) {
+            # if (m.rnd = rnd) {
+                # joined(m.src) := true;
+                # highest_vote(N,R,V) := highest_vote(N,R,V) | (m.voted & N = m.src & R = m.last_vote_rnd & V = m.last_vote_val);
+            # }
+        # }
 
-        export action propose(v:value, q:quorum, r1:round) = {
-            require q_member(N,q) -> joined(N); # all members of q have joined round r
-            require r1 < rnd;
-            require
-                (forall N,R,V . q_member(N,q) -> ~highest_vote(N,R,V)) # no member of q ever voted
-            |   (forall N,R,V.
-                    (q_member(N,q) & highest_vote(N,R,V) -> R <= r1) # r1 is the max voted round in q
-                &   (q_member(N,q) & highest_vote(N,r1,V) -> V = v) # only v was voted in round r1 among q
-                &   safe_at(r1,v) ); # v is safe at r1
-            # broadcast a propose msg:
-            var m: proposal_msg;
-            m.src := n;
-            m.rnd := rnd;
-            m.val := v;
-            call shim.broadcast(n,m);
-        }
+        # export action propose(v:value, q:quorum, r1:round) = {
+            # require q_member(N,q) -> joined(N); # all members of q have joined round r
+            # require r1 < rnd;
+            # require
+                # (forall N,R,V . q_member(N,q) -> ~highest_vote(N,R,V)) # no member of q ever voted
+            # |   (forall N,R,V.
+                    # (q_member(N,q) & highest_vote(N,R,V) -> R <= r1) # r1 is the max voted round in q
+                # &   (q_member(N,q) & highest_vote(N,r1,V) -> V = v) # only v was voted in round r1 among q
+                # &   safe_at(r1,v) ); # v is safe at r1
+            # # broadcast a propose msg:
+            # var m: proposal_msg;
+            # m.src := n;
+            # m.rnd := rnd;
+            # m.val := v;
+            # call shim.broadcast(n,m);
+        # }
 
-        implement shim.proposal_handler.handle(m:proposal_msg) {
-            if (m.rnd = rnd & (forall V. ~prepared(n,V)) & (locked -> last_vote_val = m.val)) {
-                prepared(n,m.val) := true;
-                var m2:prepare_msg;
-                m2.src := n;
-                m2.rnd := rnd;
-                m2.val := m.val;
-                call shim.broadcast(n,m);
-            }
-        }
+        # implement shim.proposal_handler.handle(m:proposal_msg) {
+            # if (m.rnd = rnd & (forall V. ~prepared(n,V)) & (locked -> last_vote_val = m.val)) {
+                # prepared(n,m.val) := true;
+                # var m2:prepare_msg;
+                # m2.src := n;
+                # m2.rnd := rnd;
+                # m2.val := m.val;
+                # call shim.broadcast(n,m);
+            # }
+        # }
 
-        implement shim.prepare_handler.handle(m:prepare_msg) {
-            if (m.rnd = rnd) {
-                prepared(m.src, m.val) := true;
-            }
-        }
+        # implement shim.prepare_handler.handle(m:prepare_msg) {
+            # if (m.rnd = rnd) {
+                # prepared(m.src, m.val) := true;
+            # }
+        # }
 
-        relation safe_at_(R:round, V:value) # we use this relation as a temporary relation variable
-        action new_safe_val(r:round, v:value) = {
-            # here we update max_safe and max_all_safe knowing that v is safe at r
-            safe_at_(R,V) := *; # non-deterministic choice
-            # now we make sure that safe_at_ describes what's safe according to what the node knows:
-            assume safe_at_(R,V) = safe_at(R,V) | (R <= r & V = v);
-            # then we set max_safe and max_all_safe accordingly
-            max_safe_val := *; # this is non-deterministic choice
-            max_safe_rnd := *;
-            assume safe_at_(R,V) -> R <= max_safe_rnd; # max_safe_rnd is the max round at which we know a value is safe
-            assume safe_at_(max_safe_rnd,max_safe_val); # and max_safe_val is a corresponding value
-            max_all_safe := *;
-            assume R <= max_all_safe -> safe_at_(R,V);
-            # now send msgs:
-            # send all_safe msg:
-            var m:all_safe_msg;
-            m.src := n;
-            m.rnd := max_all_safe;
-            call shim.broadcast(n,m);
-            # send safe_at msg:
-            var m2:safe_at_msg;
-            m2.src := n;
-            m2.rnd := max_safe_rnd;
-            m2.val := max_safe_val;
-            call shim.broadcast(n,m2);
-        }
+        # relation safe_at_(R:round, V:value) # we use this relation as a temporary relation variable
+        # action new_safe_val(r:round, v:value) = {
+            # # here we update max_safe and max_all_safe knowing that v is safe at r
+            # safe_at_(R,V) := *; # non-deterministic choice
+            # # now we make sure that safe_at_ describes what's safe according to what the node knows:
+            # assume safe_at_(R,V) = safe_at(R,V) | (R <= r & V = v);
+            # # then we set max_safe and max_all_safe accordingly
+            # max_safe_val := *; # this is non-deterministic choice
+            # max_safe_rnd := *;
+            # assume safe_at_(R,V) -> R <= max_safe_rnd; # max_safe_rnd is the max round at which we know a value is safe
+            # assume safe_at_(max_safe_rnd,max_safe_val); # and max_safe_val is a corresponding value
+            # max_all_safe := *;
+            # assume R <= max_all_safe -> safe_at_(R,V);
+            # # now send msgs:
+            # # send all_safe msg:
+            # var m:all_safe_msg;
+            # m.src := n;
+            # m.rnd := max_all_safe;
+            # call shim.broadcast(n,m);
+            # # send safe_at msg:
+            # var m2:safe_at_msg;
+            # m2.src := n;
+            # m2.rnd := max_safe_rnd;
+            # m2.val := max_safe_val;
+            # call shim.broadcast(n,m2);
+        # }
 
 
-        implement shim.safe_at_handler.handle(m:safe_at_msg) {
-            heard_safe_at(m.src, R, V) := R = m.rnd & V = m.val;
-        }
+        # implement shim.safe_at_handler.handle(m:safe_at_msg) {
+            # heard_safe_at(m.src, R, V) := R = m.rnd & V = m.val;
+        # }
 
-        implement shim.all_safe_handler.handle(m:all_safe_msg) {
-            heard_all_safe(m.src, R) := R = m.rnd;
-        }
+        # implement shim.all_safe_handler.handle(m:all_safe_msg) {
+            # heard_all_safe(m.src, R) := R = m.rnd;
+        # }
 
-        export action update_max_all_safe(b:blocking, r:round) = {
-            require max_all_safe < r;
-            require b_member(N,b) -> exists R . r <= R & heard_all_safe(N, R);
-            max_all_safe := r;
-            if (max_safe_rnd < max_all_safe) {
-                max_safe_rnd := max_all_safe
-            }
-        }
+        # export action update_max_all_safe(b:blocking, r:round) = {
+            # require max_all_safe < r;
+            # require b_member(N,b) -> exists R . r <= R & heard_all_safe(N, R);
+            # max_all_safe := r;
+            # if (max_safe_rnd < max_all_safe) {
+                # max_safe_rnd := max_all_safe
+            # }
+        # }
 
-        export action update_max_safe(b:blocking, r:round, v:value) = {
-            require max_safe_rnd <= r;
-            require b_member(N,b) -> exists R . r <= R & heard_safe_at(N, R, v);
-            call new_safe_val(r, v);
-        }
+        # export action update_max_safe(b:blocking, r:round, v:value) = {
+            # require max_safe_rnd <= r;
+            # require b_member(N,b) -> exists R . r <= R & heard_safe_at(N, R, v);
+            # call new_safe_val(r, v);
+        # }
 
-        export action vote(v:value, q:quorum) = {
-            require q_member(N,q) -> prepared(N,v);
-            locked := true;
-            # update last_vote:
-            voted := true;
-            last_vote_val := v;
-            last_vote_rnd := rnd;
-            call new_safe_val(rnd, v);
-            # send vote msg:
-            var m:vote_msg;
-            m.rnd := rnd;
-            m.val := v;
-            call shim.broadcast(n,m);
-        }
+        # export action vote(v:value, q:quorum) = {
+            # require q_member(N,q) -> prepared(N,v);
+            # locked := true;
+            # # update last_vote:
+            # voted := true;
+            # last_vote_val := v;
+            # last_vote_rnd := rnd;
+            # call new_safe_val(rnd, v);
+            # # send vote msg:
+            # var m:vote_msg;
+            # m.rnd := rnd;
+            # m.val := v;
+            # call shim.broadcast(n,m);
+        # }
 
-        implement shim.vote_handler.handle(m:vote_msg) {
-            if (m.rnd = rnd) {
-                votes(m.src, m.val) := true;
-            }
-        }
+        # implement shim.vote_handler.handle(m:vote_msg) {
+            # if (m.rnd = rnd) {
+                # votes(m.src, m.val) := true;
+            # }
+        # }
 
-        export action decide(v:value, q:quorum) = {
-            require q_member(N,q) -> votes(N,v);
-            decision := v;
-        }
+        # export action decide(v:value, q:quorum) = {
+            # require q_member(N,q) -> votes(N,v);
+            # decision := v;
+        # }
     }
 } with round, intersection_assumptions, shim
 
@@ -447,11 +482,12 @@ trusted isolate shim = {
     }
 
     instance proposal_handler : handler(proposal_msg)
-    instance prepare_handler : handler(prepare_msg)
+    instance suggest_handler : handler(suggest_msg)
+    instance proof_handler : handler(proof_msg)
+    instance key_1_handler : handler(key_1_msg)
+    instance key_2_handler : handler(key_2_msg)
+    instance key_3_handler : handler(key_3_msg)
     instance vote_handler : handler(vote_msg)
-    instance safe_at_handler : handler(safe_at_msg)
-    instance all_safe_handler : handler(all_safe_msg)
-    instance start_round_handler : handler(start_round_msg)
 
     relation sent(M:msg,N:node)
 
