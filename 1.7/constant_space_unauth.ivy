@@ -42,7 +42,7 @@ isolate abstract_protocol = {
         left_round(N,R) := false;
     }
 
-    export action join_round(n:node, r:round) = {
+    action join_round(n:node, r:round) = {
         require ~left_round(n,r);
         left_round(n,R) := R < r;
     }
@@ -65,14 +65,14 @@ isolate abstract_protocol = {
         (forall N,R . q_member(N,q) & R < r2 -> left_round(N,r2))
     &
         (
-            (       r1 < r2
+            (       (r2 ~= 0 -> r1 < r2)
                 &   (forall N . b_member(N,b) -> claims_safe_at(N,r1,v)) # v is safe at r1
                 &   (forall N,V . q_member(N,q) & temp_2(N,r1,V) -> V = v) # only v voted for at r1, if any, among q
                 &   (forall N,R,V . q_member(N,q) & r1 < R & R < r2 -> ~temp_2(N,R,V)) ) # no vote among q after r1
         |
             (   forall N,R,V . q_member(N,q) & R < r2 -> ~temp_2(N,R,V) ) ) # nobody ever voted before r2
 
-    export action do_key_1(n:node, r:round, v:value) = {
+    action do_key_1(n:node, r:round, v:value) = {
         require ~key_1(n,r,V) & ~left_round(n,r);
         # non-leaders use key_1 and vote to determine what is safe:
         temp(N,R,V) := key_1(N,R,V);
@@ -82,33 +82,33 @@ isolate abstract_protocol = {
         left_round(n, R) := R < r;
     }
 
-    export action do_key_2(n:node, r:round, v:value) = {
+    action do_key_2(n:node, r:round, v:value) = {
         require ~key_2(n,r,V) & ~left_round(n,r);
         require exists Q . q_member(N,Q) -> key_1(N,r,v);
         key_2(n, r, v) := true;
         left_round(n, R) := R < r;
     }
 
-    export action do_key_3(n:node, r:round, v:value) = {
+    action do_key_3(n:node, r:round, v:value) = {
         require ~key_3(n,r,V) & ~left_round(n,r);
         require exists Q . q_member(N,Q) -> key_2(N,r,v);
         key_3(n, r, v) := true;
         left_round(n, R) := R < r;
     }
 
-    export action do_vote(n:node, r:round, v:value) = {
+    action do_vote(n:node, r:round, v:value) = {
         require ~vote(n,r,V) & ~left_round(n,r);
         require exists Q . q_member(N,Q) -> key_3(N,r,v);
         vote(n, r, v) := true;
         left_round(n, R) := R < r;
     }
 
-    export action decide(n:node, r:round, v:value, q:quorum) = {
+    action decide(n:node, r:round, v:value, q:quorum) = {
         require q_member(N, q) -> vote(N, r, v);
         decided(n, r, v) := true;
     }
 
-    export action propose(r:round, v:value, q:quorum, r1:round) = {
+    action propose(r:round, v:value, q:quorum, r1:round) = {
         # leaders use key_2 and key_3 to determine what is safe:
         temp(N,R,V) := key_2(N,R,V);
         temp_2(N,R,V) := key_3(N,R,V);
@@ -172,6 +172,12 @@ object round_opt_t = {
     individual present: bool
 }
 
+object value_opt_t = {
+    type this
+    individual val : value
+    individual present: bool
+}
+
 type msg
 
 object proposal_msg = {
@@ -185,18 +191,20 @@ object proposal_msg = {
 object suggest_msg = {
     variant this of msg = struct {
         src : node,
+        rnd : round,
         key_2 : pair_opt_t,
-        prev_key2 : round_opt_t,
-        key3 : pair_opt_t,
-        val : value
+        prev_key_2 : round_opt_t,
+        key_3 : pair_opt_t
     }
 }
 
 object proof_msg = {
     variant this of msg = struct {
         src : node,
+        rnd : round,
         vote : pair_opt_t,
-        key1 : pair_opt_t
+        key_1 : pair_opt_t,
+        prev_key_1 : round_opt_t
     }
 }
 
@@ -242,6 +250,7 @@ isolate protocol = {
 
         individual rnd: round # the current round of the node
         individual phase: phase_t
+        individual proposal: value_opt_t
 
         individual vote: pair_opt_t
         individual key_3: pair_opt_t
@@ -258,32 +267,57 @@ isolate protocol = {
         relation key_2s(N:node,V:value) # key_2 msgs received in the current round
         relation key_1s(N:node,V:value) # key_1 msgs received in the current round
         relation votes(N:node,V:value) # vote msgs received in the current round
+        relation joined(N:node) # who joined the current round
 
         # state used by a leader to pick a proposal:
-        relation joined(N:node) # who joined the current round
-        relation highest_vote(N:node, R:round, V:value) # highest votes
+        relation highest_key_3(N:node, R:round, V:value)
         relation highest_key_2(N:node, R:round, V:value)
         relation highest_prev_key_2(N:node, R:round)
 
         # state used by a non-leader leader to determine what values are safe the current round:
+        relation highest_vote(N:node, R:round, V:value) # highest votes
         relation highest_key_1(N:node, R:round, V:value)
         relation highest_prev_key_1(N:node, R:round)
 
+        # the refinement map:
+        invariant R < rnd = abstract_protocol.left_round(n, R)
+
+        invariant vote.present -> abstract_protocol.vote(n, vote.rnd, vote.val)
+        invariant vote.present & vote.rnd < R -> ~abstract_protocol.vote(n, R, V)
+        invariant ~vote.present -> ~abstract_protocol.vote(N,R,V)
+
+        invariant key_1.present -> abstract_protocol.key_1(n, key_1.rnd, key_1.val)
+        invariant key_1.present & key_1.rnd < R -> ~abstract_protocol.key_1(n, R, V)
+        invariant ~key_1.present -> ~abstract_protocol.key_1(N,R,V)
+
+        invariant key_2.present -> abstract_protocol.key_2(n, key_2.rnd, key_2.val)
+        invariant key_2.present & key_2.rnd < R -> ~abstract_protocol.key_2(n, R, V)
+        invariant ~key_2.present -> ~abstract_protocol.key_2(N,R,V)
+
+        invariant key_3.present -> abstract_protocol.key_3(n, key_3.rnd, key_3.val)
+        invariant key_3.present & key_3.rnd < R -> ~abstract_protocol.key_3(n, R, V)
+        invariant ~key_3.present -> ~abstract_protocol.key_3(N,R,V)
+
+        invariant well_behaved(N) & joined(N) & R < rnd -> abstract_protocol.left_round(N,R)
+
+        invariant forall M:suggest_msg. shim.sent(M2,N) & M2 *> M & well_behaved(M.src) -> suggest_msg.rnd(M) <= protocol.server.rnd(suggest_msg.src(M))
+        invariant forall M:proof_msg. shim.sent(M2,N) & M2 *> M & well_behaved(M.src) -> proof_msg.rnd(M) <= protocol.server.rnd(proof_msg.src(M))
 
         after init {
             # call reset_round_state; TODO: BUG: seems we can't call anything in init
             rnd := 0;
+            proposal.present := false;
             vote.present := false;
             key_3.present := false;
             key_2.present := false;
             key_1.present := false;
             decided := false;
             phase := suggest_phase;
+            joined(N) := false;
             key_3s(N,V) := false;
             key_2s(N,V) := false;
             key_1s(N,V) := false;
             votes(N,V) := false;
-            joined(N) := false;
             highest_vote(N,R,V) := false;
             highest_key_2(N,R,V) := false;
             highest_prev_key_2(N,R) := false;
@@ -292,12 +326,13 @@ isolate protocol = {
         }
 
         action reset_round_state = {
+            proposal.present := false;
+            joined(N) := false;
             phase := suggest_phase;
             key_3s(N,V) := false;
             key_2s(N,V) := false;
             key_1s(N,V) := false;
             votes(N,V) := false;
-            joined(N) := false;
             highest_vote(N,R,V) := false;
             highest_key_2(N,R,V) := false;
             highest_prev_key_2(N,R) := false;
@@ -309,56 +344,112 @@ isolate protocol = {
         export action start_round(r:round) = {
             require r > rnd;
             rnd := r;
-
             call reset_round_state;
 
-            if proposers.is_proposer(n,r) {
-                joined(N) := N = n;
-            }
-            else {
-                # var m:start_round_msg;
-                # m.src := n;
-                # m.rnd := r;
-                # m.voted := voted;
-                # m.last_vote_rnd := last_vote_rnd;
-                # m.last_vote_val := last_vote_val;
+            # send suggest message to the leader:
+            var m1:suggest_msg;
+            m1.src := n;
+            m1.rnd := rnd;
+            m1.key_2 := key_2;
+            m1.prev_key_2 := prev_key_2;
+            m1.key_3 := key_3;
+            call shim.send(n, proposers.get_proposer(r), m1); # note that, for simplicity, the leader sends a suggest message to itself here
+
+            # broadcast proof messages:
+            var m2:proof_msg;
+            m2.src := n;
+            m2.rnd := rnd;
+            m2.vote := vote;
+            m2.prev_key_1 := prev_key_1;
+            call shim.broadcast(n, m2);
+
+            # ghost call to the abstract protocol:
+            call abstract_protocol.join_round(n,r);
+        }
+
+        implement shim.suggest_handler.handle(m:suggest_msg) {
+            if (m.rnd = rnd) {
+                joined(m.src) := true;
+                highest_key_3(m.src,R,V) := m.key_3.present & R = m.key_3.rnd & V = m.key_3.val;
+                highest_key_2(m.src,R,V) := m.key_2.present & R = m.key_2.rnd & V = m.key_2.val;
+                highest_prev_key_2(m.src,R) := m.key_2.present & R = m.key_2.rnd;
             }
         }
 
-        # implement shim.start_round_handler.handle(m:start_round_msg) {
-            # if (m.rnd = rnd) {
-                # joined(m.src) := true;
-                # highest_vote(N,R,V) := highest_vote(N,R,V) | (m.voted & N = m.src & R = m.last_vote_rnd & V = m.last_vote_val);
-            # }
-        # }
+        implement shim.proof_handler.handle(m:proof_msg) {
+            if (m.rnd = rnd) {
+                joined(m.src) := true;
+                highest_vote(m.src,R,V) := m.vote.present & R = m.vote.rnd & V = m.vote.val;
+                highest_key_1(m.src,R,V) := m.key_1.present & R = m.key_1.rnd & V = m.key_1.val;
+                highest_prev_key_1(m.src,R) := m.key_1.present & R = m.key_1.rnd;
+            }
+        }
 
-        # export action propose(v:value, q:quorum, r1:round) = {
-            # require q_member(N,q) -> joined(N); # all members of q have joined round r
-            # require r1 < rnd;
-            # require
-                # (forall N,R,V . q_member(N,q) -> ~highest_vote(N,R,V)) # no member of q ever voted
-            # |   (forall N,R,V.
-                    # (q_member(N,q) & highest_vote(N,R,V) -> R <= r1) # r1 is the max voted round in q
-                # &   (q_member(N,q) & highest_vote(N,r1,V) -> V = v) # only v was voted in round r1 among q
-                # &   safe_at(r1,v) ); # v is safe at r1
-            # # broadcast a propose msg:
-            # var m: proposal_msg;
-            # m.src := n;
-            # m.rnd := rnd;
-            # m.val := v;
-            # call shim.broadcast(n,m);
-        # }
+        relation key_2_claims_safe_at(N:node, R:round, V:value)
+        definition key_2_claims_safe_at(N:node, r:round, v:value) =
+            exists R . r <= R & (highest_key_2(N,R,v) | highest_prev_key_2(N,R))
 
-        # implement shim.proposal_handler.handle(m:proposal_msg) {
-            # if (m.rnd = rnd & (forall V. ~prepared(n,V)) & (locked -> last_vote_val = m.val)) {
-                # prepared(n,m.val) := true;
-                # var m2:prepare_msg;
-                # m2.src := n;
-                # m2.rnd := rnd;
-                # m2.val := m.val;
-                # call shim.broadcast(n,m);
-            # }
-        # }
+        relation key_2_is_safe_at(R:round, V:value, B:blocking)
+        definition key_2_is_safe_at(r:round, v:value, b:blocking) = forall N . b_member(N,b) -> key_2_claims_safe_at(N,r,v)
+
+        export action propose(r:round, v:value, q:quorum, b:blocking) = {
+            require q_member(N,q) -> joined(N);
+            require rnd ~= 0 -> r < rnd;
+            # pick a safe value:
+            require
+                rnd = 0 # everything is safe at 0
+            |   (forall N,R,V . q_member(N,q) -> ~highest_key_3(N,R,V)) # no member of q reported any key_3, so any value is safe
+            |   (forall N,R,V. # v is safe at rnd
+                    (q_member(N,q) & highest_key_3(N,R,V) -> R <= r) # r is the max key_3 round among q
+                &   (q_member(N,q) & highest_key_3(N,r,V) -> V = v) # only v was reported as key_3 value in round r among q
+                &   key_2_is_safe_at(r,v,b) ); # v is safe at r
+            # broadcast a propose msg:
+            var m: proposal_msg;
+            m.src := n;
+            m.rnd := rnd;
+            m.val := v;
+            call shim.broadcast(n,m);
+        }
+
+        implement shim.proposal_handler.handle(m:proposal_msg) {
+            require m.rnd = rnd & proposers.is_proposer(m.src, rnd);
+            proposal.present := true;
+            proposal.val := m.val;
+        }
+
+        relation key_1_claims_safe_at(N:node, R:round, V:value)
+        definition key_1_claims_safe_at(N:node, r:round, v:value) =
+            exists R . r <= R & (highest_key_1(N,R,v) | highest_prev_key_1(N,R))
+
+        relation key_1_is_safe_at(R:round, V:value, B:blocking)
+        definition key_1_is_safe_at(r:round, v:value, b:blocking) = forall N . b_member(N,b) -> key_1_claims_safe_at(N,r,v)
+
+        export action do_key_1(r:round, q:quorum, b:blocking) = {
+            # here the node checks whether the proposal is safe using votes and key_1s:
+            require proposal.present;
+            require q_member(N,q) -> joined(N);
+            require rnd ~= 0 -> r < rnd;
+            # pick a safe value:
+            require
+                rnd = 0
+            |   (forall N,R,V . q_member(N,q) -> ~highest_vote(N,R,V)) # no member of q reported any vote, so any value is safe
+            |   (forall N,R,V. # proposal.val is safe at rnd
+                    (q_member(N,q) & highest_vote(N,R,V) -> R <= r) # r is the max vote round among q
+                &   (q_member(N,q) & highest_vote(N,r,V) -> V = proposal.val) # only v was reported as vote value in round r among q
+                &   key_1_is_safe_at(r,proposal.val,b) ); # v is safe at r
+
+            # TODO: there's still a problem with objects here; this makes an invariant about vote fail...
+            key_1.present := true;
+            key_1.rnd := rnd;
+            key_1.val := proposal.val;
+
+            # broadcast key_1 message:
+            var m: key_1_msg;
+            m.src := n;
+            m.rnd := rnd;
+            m.val := proposal.val;
+            call shim.broadcast(n,m);
+        }
 
         # implement shim.prepare_handler.handle(m:prepare_msg) {
             # if (m.rnd = rnd) {
@@ -443,7 +534,7 @@ isolate protocol = {
             # decision := v;
         # }
     }
-} with round, intersection_assumptions, shim
+} with round, intersection_assumptions, shim, abstract_protocol
 
 isolate proposers = {
     # Each round has a unique proposer. In order to avoid a
@@ -473,7 +564,7 @@ trusted isolate shim = {
     # In order not repeat the same code for each handler, we use a handler
     # module parameterized by the type of msg it will handle.
     module handler(t) = {
-        action handle(dst:node,m:t)
+        export action handle(dst:node,m:t)
         object spec = {
             before handle {
                 assert exists M:msg . M *> m & sent(M,dst)
