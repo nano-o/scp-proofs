@@ -1,0 +1,44 @@
+#lang ivy1.8
+
+include order
+
+finite type node
+type nset # sets of nodes
+
+relation well_behaved(N:node)
+relation intertwined(N:node)
+relation intact(N:node)
+
+relation member(N:node, S:nset)
+relation is_quorum(Q:nset)
+relation blocks_slices(S:nset, N:node) # set S intersects all slices of N
+
+trusted isolate node_properties = {
+    # intact nodes are intertwined
+    property intact(N) -> intertwined(N)
+    # intertwined nodes are well-behaved
+    property intertwined(N) -> well_behaved(N)
+}
+
+trusted isolate quorum_properties = {
+    # if Q1 and Q2 are two quorums of intertwined nodes, then Q1 and Q2 have a well-behaved node in common:
+    property [qi_intertwined] (exists N1 . intertwined(N1) & is_quorum(Q1) & member(N1,Q1)) & (exists N2 . intertwined(N2) & is_quorum(Q2) & member(N2,Q2)) -> exists N3 . well_behaved(N3) & member(N3,Q1) & member(N3,Q2)
+    # if Q1 and Q2 are two quorums of intact nodes, then Q1 and Q2 have an intact node in common:
+    property [qi_intact] (exists N1 . intact(N1) & is_quorum(Q1) & member(N1,Q1)) & (exists N2 . intact(N2) & is_quorum(Q2) & member(N2,Q2)) -> exists N3 . intact(N3) & member(N3,Q1) & member(N3,Q2)
+    # a set that blocks an intact node contains an intact node:
+    property [slice_blocks_ne] (exists N . intact(N) & blocks_slices(S,N)) -> (exists N2 . member(N2,S) & intact(N2))
+    # the set of all intact nodes is a quorum
+    property [intact_is_quorum] exists Q . (forall N . member(N,Q) <-> intact(N)) & is_quorum(Q)
+}
+
+axiom [cascade_thm] { # needed for liveness
+    individual q0:nset
+    individual n0:node
+    relation p(N:node)
+    # assumptions:
+    property is_quorum(q0) & intact(n0) & member(n0,q0)
+    property forall N . intact(N) & member(N,q0) -> p(N)
+    # the conclusion:
+    property (forall N . intact(N) -> p(N)) | (exists N2,S . intact(N2) & ~p(N2) & blocks_slices(S,N2) & (forall N3 . member(N3,S) -> (intact(N3) & p(N3))))
+}
+

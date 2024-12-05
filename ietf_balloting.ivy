@@ -1,0 +1,50 @@
+#lang ivy1.8
+
+include order
+include fba
+
+type val
+instance ballnum : unbounded_sequence
+
+type ballot = struct {
+    counter: ballnum,
+    value: val
+}
+
+
+object interface = {
+    export action propose(n:node, v:val)
+    import action decide(n:node, v:val)
+    specification {
+        relation decided(V:val)
+        after init {
+            decided(V) := false
+        }
+        before decide {
+            require decided(V) -> V = v;
+            decided(V) := V = v
+        }
+    }
+}
+
+object abstract_balloting = {
+    # the following two relations are a relational abstraction of the current ballot of each node
+    relation started_ballot(N:node, B:ballot)
+    relation left_ballot(N:node, B:ballot)
+    # federated voting messages:
+    relation voted_prepared(N:node, B:ballot, V:val)
+    relation accepted_prepared(N:node, B:ballot, V:val)
+    relation voted_committed(N:node, B:ballot, V:val)
+    relation accepted_committed(N:node, B:ballot, V:val)
+    relation externalized(N:node, B:ballot, V:val)
+
+    after init {
+        voted_prepared(N,B,V) := false;
+        accepted_prepared(N,B,V) := false;
+        voted_committed(N,B,V) := false;
+        accepted_committed(N,B,V) := false;
+        externalized(N,B,V) := false;
+        left_ballot(N,B) := false;
+        started_ballot(N,B) := false;
+    }
+}
