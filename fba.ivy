@@ -2,7 +2,7 @@
 
 include order
 
-finite type node
+finite type node # TODO what does finite do?
 type nset # sets of nodes
 
 relation well_behaved(N:node)

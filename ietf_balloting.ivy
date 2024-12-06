@@ -3,48 +3,152 @@
 include order
 include fba
 
-type val
+instance val : unbounded_sequence
 instance ballnum : unbounded_sequence
 
-type ballot = struct {
-    counter: ballnum,
-    value: val
+object ballot = {
+    type this = struct {
+        counter: ballnum,
+        value: val
+    }
+    relation less(B1:this, B2:this)
+    relation less_eq(B1:this, B2:this)
+    definition less(B1, B2) = counter(B1) < counter(B2)
+        | (counter(B1) = counter(B2) & value(B1) < value(B2))
+    definition less_eq(B1, B2) = B1 = B2 | less(B1,B2)
+    relation less_and_incompatible(B1:this, B2:this)
+    definition less_and_incompatible(B1, B2) = less(B1,B2) & value(B1) ~= value(B2)
 }
-
 
 object interface = {
-    export action propose(n:node, v:val)
-    import action decide(n:node, v:val)
+    import action externalize(n:node, v:val)
     specification {
-        relation decided(V:val)
+        relation externalized(V:val)
         after init {
-            decided(V) := false
+            externalized(V) := false
         }
-        before decide {
-            require decided(V) -> V = v;
-            decided(V) := V = v
+        before externalize {
+            if intertwined(n) {
+                require externalized(V) -> V = v;
+                externalized(V) := V = v
+            }
         }
+        invariant externalized(V1) & externalized(V2) -> V1 = V2
     }
 }
 
-object abstract_balloting = {
+isolate abstract_balloting = {
     # the following two relations are a relational abstraction of the current ballot of each node
-    relation started_ballot(N:node, B:ballot)
-    relation left_ballot(N:node, B:ballot)
+    relation started_ballnum(N:node, C:ballnum)
+    relation left_ballnum(N:node, C:ballnum)
+    function ballot_value(N:node):val
     # federated voting messages:
-    relation voted_prepared(N:node, B:ballot, V:val)
-    relation accepted_prepared(N:node, B:ballot, V:val)
-    relation voted_committed(N:node, B:ballot, V:val)
-    relation accepted_committed(N:node, B:ballot, V:val)
-    relation externalized(N:node, B:ballot, V:val)
+    relation voted_prepared(N:node, B:ballot)
+    relation accepted_prepared(N:node, B:ballot)
+    relation confirmed_prepared(N:node, B:ballot)
+    relation voted_committed(N:node, B:ballot)
+    relation accepted_committed(N:node, B:ballot)
+    relation externalized(N:node, B:ballot)
 
     after init {
-        voted_prepared(N,B,V) := false;
-        accepted_prepared(N,B,V) := false;
-        voted_committed(N,B,V) := false;
-        accepted_committed(N,B,V) := false;
-        externalized(N,B,V) := false;
-        left_ballot(N,B) := false;
-        started_ballot(N,B) := false;
+        left_ballnum(N,B) := false;
+        started_ballnum(N,B) := false;
+        voted_prepared(N,B) := false;
+        accepted_prepared(N,B) := false;
+        confirmed_prepared(N,B) := false;
+        voted_committed(N,B) := false;
+        accepted_committed(N,B) := false;
+        externalized(N,B) := false;
     }
-}
+
+    action byz_havoc = {
+        voted_prepared(N,B) := *;
+        require ~(well_behaved(N) & (voted_prepared(N,B) ~= old voted_prepared(N,B)));
+        accepted_prepared(N,B) := *;
+        require ~(well_behaved(N) & (accepted_prepared(N,B) ~= old accepted_prepared(N,B)));
+        voted_committed(N,B) := *;
+        require ~(well_behaved(N) & (voted_committed(N,B) ~= old voted_committed(N,B)));
+        accepted_committed(N,B) := *;
+        require ~(well_behaved(N) & (accepted_committed(N,B) ~= old accepted_committed(N,B)));
+        confirmed_prepared(N,B) := *;
+        require ~(well_behaved(N) & (confirmed_prepared(N,B) ~= old confirmed_prepared(N,B)));
+        externalized(N,B) := *;
+        require ~(well_behaved(N) & (externalized(N,B) ~= old externalized(N,B)));
+        started_ballnum(N,C) := *;
+        require ~(well_behaved(N) & (started_ballnum(N,C) ~= old started_ballnum(N,C)));
+        left_ballnum(N,C) := *;
+        require ~(well_behaved(N) & (left_ballnum(N,C) ~= old left_ballnum(N,C)));
+    }
+
+    action increase_bal_counter(n:node, c:ballnum) = {
+        require c > 0 & ~left_ballnum(n, c);
+        left_ballnum(n, C) := C < c;
+        started_ballnum(n, c) := true;
+        var b:ballot; # the new ballot
+        b.counter := c;
+        if exists B . confirmed_prepared(n,B) {
+            local bmax:ballot { # max confirmed prepared
+                require confirmed_prepared(n,bmax)
+                    & (forall B . confirmed_prepared(n,B) -> ballot.less_eq(B, bmax));
+                b.value := bmax.value;
+            }
+        }
+        ballot_value(n) := b.value;
+        voted_prepared(n, b) := true;
+    }
+
+    action accept_prepared(n:node, b:ballot) = {
+        require (exists Q . is_quorum(Q) & forall N . member(N,Q) -> voted_prepared(N,b) | accepted_prepared(N,b))
+            | exists B . blocks_slices(B,n) & forall N . (member(N,B) -> accepted_prepared(N,b));
+        accepted_prepared(n,b) := true;
+    }
+
+    action confirm_prepared(n:node, b:ballot) = {
+        require exists Q . is_quorum(Q) & forall N . member(N,Q) -> accepted_prepared(N,b);
+        confirmed_prepared(n,b) := true;
+    }
+
+    action vote_to_commit(n:node, b:ballot) = {
+        require started_ballnum(n, b.counter);
+        require forall B . ballot.less_and_incompatible(b, B) ->
+            ~(voted_prepared(n,B) | accepted_prepared(n,B) | confirmed_prepared(n,B));
+        require confirmed_prepared(n,b);
+        voted_committed(n,b) := true;
+    }
+
+    action accept_committed(n:node, b:ballot) = {
+        require exists Q . is_quorum(Q) & forall N . member(N,Q) -> voted_committed(N,b) | accepted_committed(N,b)
+            | exists B . blocks_slices(B, n) & forall N . member(N,B) -> accepted_committed(N,b);
+        require confirmed_prepared(n,b);
+        accepted_committed(n,b) := true;
+    }
+
+    action externalize(n:node, b:ballot) = {
+        require exists Q . is_quorum(Q) & forall N . member(N,Q) -> accepted_committed(N,b);
+        externalized(n,b) := true;
+        # assume externalized(N1,B1) & externalized(N2,B2) -> ballot.value(B1) = ballot.value(B2);
+        # assume externalized(N,B) -> interface.externalized(ballot.value(B));
+        call interface.externalize(n, b.value);
+    }
+
+    isolate invariants = {
+        invariant well_behaved(N) & started_ballnum(N,C) -> C > 0
+        invariant well_behaved(N) & (voted_prepared(N,B) | voted_committed(N,B)) -> ballot.counter(B) > 0 & started_ballnum(N, ballot.counter(B))
+        # invariant well_behaved(N) & accepted_prepared(N,B) -> exists Q . is_quorum(Q) & forall N . member(N,Q) & well_behaved(N) -> voted_prepared(N,B)
+        invariant intact(N) & accepted_prepared(N,B) -> exists Q . is_quorum(Q) & forall N . member(N,Q) & well_behaved(N) -> voted_prepared(N,B)
+        # invariant well_behaved(N) & accepted_committed(N,B) -> exists Q . is_quorum(Q) & forall N . (member(N,Q) & well_behaved(N) -> voted_committed(N,B))
+
+        # invariant well_behaved(N1) & well_behaved(N2) & externalized(N1,B1) & externalized(N2,B2) -> ballot.value(B1) = ballot.value(B2)
+        # invariant well_behaved(N) & externalized(N,B) -> interface.externalized(ballot.value(B))
+
+    } with node_properties, quorum_properties, abstract_balloting, interface, ballot
+
+    export byz_havoc
+    export increase_bal_counter
+    export accept_prepared
+    export confirm_prepared
+    export vote_to_commit
+    export accept_committed
+    export externalize
+} with interface
+
