@@ -6,7 +6,7 @@ include fba
 instance val : unbounded_sequence
 instance ballnum : unbounded_sequence
 
-object ballot = {
+isolate ballot = {
     type this = struct {
         counter: ballnum,
         value: val
@@ -81,7 +81,7 @@ isolate abstract_balloting = {
     }
 
     action increase_bal_counter(n:node, c:ballnum) = {
-        require c > 0 & ~left_ballnum(n, c);
+        require c > 0 & ~started_ballnum(n,c) & ~left_ballnum(n,c);
         left_ballnum(n, C) := C < c;
         started_ballnum(n, c) := true;
         var b:ballot; # the new ballot
@@ -97,14 +97,19 @@ isolate abstract_balloting = {
         voted_prepared(n, b) := true;
     }
 
+    relation quorum_of(N:node, Q:nset)
+    definition quorum_of(N,Q) = is_quorum(Q) & member(N,Q)
+
     action accept_prepared(n:node, b:ballot) = {
-        require (exists Q . is_quorum(Q) & forall N . member(N,Q) -> voted_prepared(N,b) | accepted_prepared(N,b))
+        require (exists Q . quorum_of(n,Q) & forall N . member(N,Q) -> voted_prepared(N,b) | accepted_prepared(N,b))
             | exists B . blocks_slices(B,n) & forall N . (member(N,B) -> accepted_prepared(N,b));
+        # do not contradict previous ballots accepted as committed:
+        require ~(accepted_committed(n,B) & ballot.less_and_incompatible(B,b));
         accepted_prepared(n,b) := true;
     }
 
     action confirm_prepared(n:node, b:ballot) = {
-        require exists Q . is_quorum(Q) & forall N . member(N,Q) -> accepted_prepared(N,b);
+        require exists Q . quorum_of(n,Q) & forall N . member(N,Q) -> accepted_prepared(N,b);
         confirmed_prepared(n,b) := true;
     }
 
@@ -117,31 +122,43 @@ isolate abstract_balloting = {
     }
 
     action accept_committed(n:node, b:ballot) = {
-        require exists Q . is_quorum(Q) & forall N . member(N,Q) -> voted_committed(N,b) | accepted_committed(N,b)
+        require exists Q . quorum_of(n,Q) & forall N . member(N,Q) -> voted_committed(N,b) | accepted_committed(N,b)
             | exists B . blocks_slices(B, n) & forall N . member(N,B) -> accepted_committed(N,b);
-        require confirmed_prepared(n,b);
+        require confirmed_prepared(n,b); # important for safety of intertwined but befouled nodes
+        require ~(accepted_prepared(n,B) & ballot.less_and_incompatible(b,B));
         accepted_committed(n,b) := true;
     }
 
     action externalize(n:node, b:ballot) = {
-        require exists Q . is_quorum(Q) & forall N . member(N,Q) -> accepted_committed(N,b);
+        require exists Q . quorum_of(n,Q) & forall N . member(N,Q) -> accepted_committed(N,b);
         externalized(n,b) := true;
-        # assume externalized(N1,B1) & externalized(N2,B2) -> ballot.value(B1) = ballot.value(B2);
-        # assume externalized(N,B) -> interface.externalized(ballot.value(B));
         call interface.externalize(n, b.value);
     }
 
-    isolate invariants = {
-        invariant well_behaved(N) & started_ballnum(N,C) -> C > 0
-        invariant well_behaved(N) & (voted_prepared(N,B) | voted_committed(N,B)) -> ballot.counter(B) > 0 & started_ballnum(N, ballot.counter(B))
-        # invariant well_behaved(N) & accepted_prepared(N,B) -> exists Q . is_quorum(Q) & forall N . member(N,Q) & well_behaved(N) -> voted_prepared(N,B)
-        invariant intact(N) & accepted_prepared(N,B) -> exists Q . is_quorum(Q) & forall N . member(N,Q) & well_behaved(N) -> voted_prepared(N,B)
-        # invariant well_behaved(N) & accepted_committed(N,B) -> exists Q . is_quorum(Q) & forall N . (member(N,Q) & well_behaved(N) -> voted_committed(N,B))
+    # we start at a ballnum > 0:
+    invariant well_behaved(N) & started_ballnum(N,C) -> C > 0
+    invariant well_behaved(N) & (voted_prepared(N,B) | voted_committed(N,B)) -> started_ballnum(N, ballot.counter(B))
 
-        # invariant well_behaved(N1) & well_behaved(N2) & externalized(N1,B1) & externalized(N2,B2) -> ballot.value(B1) = ballot.value(B2)
-        # invariant well_behaved(N) & externalized(N,B) -> interface.externalized(ballot.value(B))
+    # if a node has started ballnum C then it left all lower ballnums:
+    invariant well_behaved(N) & started_ballnum(N,C2) & C1 < C2 -> left_ballnum(N,C1)
 
-    } with node_properties, quorum_properties, abstract_balloting, interface, ballot
+    # a well-behaved node that confirms something saw a quorum of accepts:
+    invariant intertwined(N) & confirmed_prepared(N,B) -> exists Q . is_quorum(Q) & (exists N . intertwined(N) & member(N,Q)) & forall N . member(N,Q) & well_behaved(N) -> accepted_prepared(N,B)
+    invariant intertwined(N) & externalized(N,B) -> exists Q . is_quorum(Q)  & (exists N . intertwined(N) & member(N,Q)) & forall N . member(N,Q) & well_behaved(N) -> accepted_committed(N,B)
+
+    # a well-behaved node does not accept something as committed unless it confirmed it prepared
+    invariant well_behaved(N) & accepted_committed(N,B) -> confirmed_prepared(N,B)
+
+    # well-behaved nodes do not accept contradictory things:
+    invariant well_behaved(N) & accepted_prepared(N,B2) & ballot.less_and_incompatible(B1, B2) -> ~accepted_committed(N,B1)
+
+    # irrelevant
+    # invariant well_behaved(N) & voted_prepared(N,B) -> started_ballnum(N, ballot.counter(B))
+    # invariant well_behaved(N) & voted_prepared(N,B1) & voted_prepared(N,B2) & ballot.counter(B1) = ballot.counter(B2) -> B1 = B2
+
+    invariant intertwined(N1) & intertwined(N2) & externalized(N1,B1) & externalized(N2,B2) -> ballot.value(B1) = ballot.value(B2)
+    invariant intertwined(N) & externalized(N,B) -> interface.externalized(ballot.value(B))
+    invariant interface.externalized(V) -> exists N,B . intertwined(N) & externalized(N,B) & ballot.value(B) = V # quantifier alternation here...
 
     export byz_havoc
     export increase_bal_counter
@@ -150,5 +167,4 @@ isolate abstract_balloting = {
     export vote_to_commit
     export accept_committed
     export externalize
-} with interface
-
+} with interface, node_properties, quorum_properties.qi_intertwined, ballot, ballnum, val
