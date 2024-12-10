@@ -44,7 +44,6 @@ object abstract_balloting = {
     # the following two relations are a relational abstraction of the current ballot of each node
     relation started_ballnum(N:node, C:ballnum)
     relation left_ballnum(N:node, C:ballnum)
-    function ballot_value(N:node):val
     # federated voting messages:
     relation voted_prepared(N:node, B:ballot)
     relation accepted_prepared(N:node, B:ballot)
@@ -97,7 +96,6 @@ object abstract_balloting = {
                     b.value := bmax.value;
                 }
             }
-            ballot_value(n) := b.value;
             voted_prepared(n, b) := true;
         }
 
@@ -174,6 +172,10 @@ object abstract_balloting = {
 
         invariant well_behaved(N) & voted_prepared(N,B) -> started_ballnum(N, ballot.counter(B))
         invariant well_behaved(N) & voted_prepared(N,B1) & voted_prepared(N,B2) & ballot.counter(B1) = ballot.counter(B2) -> B1 = B2
+
+        # TODO invariants of intact (for liveness)
+        # See SCP.ivy
+
     } with abstract_balloting.actions, ballnum
 
 }
