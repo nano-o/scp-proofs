@@ -117,8 +117,8 @@ object abstract_balloting = {
 
         action vote_to_commit(n:node, b:ballot) = {
             require started_ballnum(n, b.counter);
-            require forall B . ballot.less_and_incompatible(b, B) ->
-                ~(voted_prepared(n,B) | accepted_prepared(n,B) | confirmed_prepared(n,B));
+            # require forall B . ballot.less_and_incompatible(b, B) ->
+                # ~(voted_prepared(n,B) | accepted_prepared(n,B) | confirmed_prepared(n,B));
             require confirmed_prepared(n,b);
             voted_committed(n,b) := true;
         }
@@ -147,6 +147,9 @@ object abstract_balloting = {
     } with intertwined_safety_invariants, interface, node_properties, quorum_properties.qi_intertwined, ballot, ballnum, val
 
     isolate intertwined_safety_invariants = {
+        # invariants needed to prove the actions isolate
+        # NOTE not much happens in this isolate, as we don't even include ballot
+
         # a well-behaved node that confirms something saw a quorum of accepts:
         invariant intertwined(N) & confirmed_prepared(N,B) -> exists Q . is_quorum(Q) & (exists N . intertwined(N) & member(N,Q)) & forall N . member(N,Q) & well_behaved(N) -> accepted_prepared(N,B)
         invariant intertwined(N) & externalized(N,B) -> exists Q . is_quorum(Q)  & (exists N . intertwined(N) & member(N,Q)) & forall N . member(N,Q) & well_behaved(N) -> accepted_committed(N,B)
@@ -157,10 +160,9 @@ object abstract_balloting = {
         # well-behaved nodes do not accept contradictory things:
         invariant well_behaved(N) & accepted_prepared(N,B2) & ballot.less_and_incompatible(B1, B2) -> ~accepted_committed(N,B1)
 
-        invariant intertwined(N1) & intertwined(N2) & externalized(N1,B1) & externalized(N2,B2) -> ballot.value(B1) = ballot.value(B2)
         invariant intertwined(N) & externalized(N,B) -> interface.externalized(ballot.value(B))
         invariant interface.externalized(V) -> exists N,B . intertwined(N) & externalized(N,B) & ballot.value(B) = V # quantifier alternation here...
-    } with abstract_balloting.actions, interface, node_properties, quorum_properties.qi_intertwined, ballnum, val
+    } with abstract_balloting.actions, node_properties, interface
 
     isolate extra_invariants = {
         # we start at a ballnum > 0:
@@ -173,9 +175,20 @@ object abstract_balloting = {
         invariant well_behaved(N) & voted_prepared(N,B) -> started_ballnum(N, ballot.counter(B))
         invariant well_behaved(N) & voted_prepared(N,B1) & voted_prepared(N,B2) & ballot.counter(B1) = ballot.counter(B2) -> B1 = B2
 
-        # TODO invariants of intact (for liveness)
-        # See SCP.ivy
-
     } with abstract_balloting.actions, ballnum
 
+    isolate intact_invariants = {
+        # accept/confirm if quorum voted/accepted:
+        invariant intact(N) & confirmed_prepared(N,B) -> exists Q . is_quorum(Q) & member(N,Q) & forall N . member(N,Q) & intact(N) -> accepted_prepared(N,B)
+        invariant intact(N) & accepted_prepared(N,B) -> exists Q . is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & forall N . member(N,Q) & intact(N) -> voted_prepared(N,B)
+        invariant intact(N) & externalized(N,B) -> exists Q . is_quorum(Q) & member(N,Q) & forall N . member(N,Q) & intact(N) -> accepted_committed(N,B)
+        invariant intact(N) & accepted_committed(N,B) -> exists Q . is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & forall N . member(N,Q) & intact(N) -> voted_committed(N,B)
+
+        invariant well_behaved(N) & voted_committed(N,B) -> confirmed_prepared(N,B)
+        # important invariant: a node does not prepare a value that contradicts a previous vote to commit unless that vote cannot reach quorum threshold
+        # invariant is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & intact(N1) & ballot.less_and_incompatible(B1,B2) & voted_committed(N1,B1) & voted_prepared(N1,B2) -> (exists N . intact(N) & member(N,Q) & left_ballnum(N,ballot.counter(B1)) & ~voted_committed(N,B1))
+
+        # An accepted prepared value cannot be contradicted.
+        # invariant intact(N2) & accepted_prepared(N2,B2) & intact(N1) & ballot.less_eq(B1, B2) & accepted_committed(N1,B1) -> ballot.value(B1) = ballot.value(B2)
+    } with abstract_balloting.actions, node_properties, quorum_properties, ballnum, val, ballot, intertwined_safety_invariants, extra_invariants
 }
