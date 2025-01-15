@@ -167,10 +167,13 @@ object abstract_balloting = {
     isolate extra_invariants = {
         # we start at a ballnum > 0:
         invariant well_behaved(N) & started_ballnum(N,C) -> C > 0
-        invariant well_behaved(N) & (voted_prepared(N,B) | voted_committed(N,B)) -> started_ballnum(N, ballot.counter(B))
-
         # if a node has started ballnum C then it left all lower ballnums:
         invariant well_behaved(N) & started_ballnum(N,C2) & C1 < C2 -> left_ballnum(N,C1)
+        invariant well_behaved(N) & left_ballnum(N,C2) & C1 < C2 -> left_ballnum(N,C1)
+
+        # only vote in started ballnums:
+        invariant well_behaved(N) & (voted_prepared(N,B) | voted_committed(N,B)) -> started_ballnum(N, ballot.counter(B))
+
 
         invariant well_behaved(N) & voted_prepared(N,B) -> started_ballnum(N, ballot.counter(B))
         invariant well_behaved(N) & voted_prepared(N,B1) & voted_prepared(N,B2) & ballot.counter(B1) = ballot.counter(B2) -> B1 = B2
