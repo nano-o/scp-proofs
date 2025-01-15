@@ -149,7 +149,8 @@ object abstract_balloting = {
 
     isolate intertwined_safety_invariants = {
         # invariants needed to prove the actions isolate
-        # NOTE not much happens in this isolate, as we don't even include ballot
+        # NOTE not much happens in this isolate, as we don't even include ballot:
+        # The reasoning that depends on ballot order happens in the actions isolate (which does include ballot)
 
         # a well-behaved node that confirms something saw a quorum of accepts:
         invariant intertwined(N) & confirmed_prepared(N,B) -> exists Q . is_quorum(Q) & (exists N . intertwined(N) & member(N,Q)) & forall N . member(N,Q) & well_behaved(N) -> accepted_prepared(N,B)
