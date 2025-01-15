@@ -42,6 +42,7 @@ object abstract_balloting = {
     # we can use this object as a monitor
 
     # the following two relations are a relational abstraction of the current ballot of each node
+    # if ballnum(n) is the current ballot number of a node, then we should have `started_ballnum(N,ballnum(N))` and `left_ballnum(N,C) = C < ballnum(N)`
     relation started_ballnum(N:node, C:ballnum)
     relation left_ballnum(N:node, C:ballnum)
     # federated voting messages:
