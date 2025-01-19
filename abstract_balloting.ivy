@@ -117,9 +117,9 @@ object abstract_balloting = {
         }
 
         action vote_to_commit(n:node, b:ballot) = {
-            require started_ballnum(n, b.counter);
-            # require forall B . ballot.less_and_incompatible(b, B) ->
-                # ~(voted_prepared(n,B) | accepted_prepared(n,B) | confirmed_prepared(n,B));
+            require started_ballnum(n, b.counter) & ~left_ballnum(n, b.counter);
+            # in each ballnum we only prepare a single value:
+            require ballot.counter(B) = b.counter & voted_prepared(n,B) -> ballot.value(B) = b.value;
             require confirmed_prepared(n,b);
             voted_committed(n,b) := true;
         }
@@ -183,6 +183,10 @@ object abstract_balloting = {
     } with abstract_balloting.actions, ballnum
 
     isolate intact_invariants = {
+
+        invariant intact(N) & voted_prepared(N,B1) & voted_prepared(N,B2) & ballot.counter(B1) = ballot.counter(B2) -> ballot.value(B1) = ballot.value(B2)
+        invariant intact(N) & accepted_prepared(N,B1) & accepted_prepared(N,B2) & ballot.counter(B1) = ballot.counter(B2) -> ballot.value(B1) = ballot.value(B2)
+
         # accept/confirm if quorum voted/accepted:
         invariant intact(N) & confirmed_prepared(N,B) -> exists Q . is_quorum(Q) & member(N,Q) & forall N . member(N,Q) & intact(N) -> accepted_prepared(N,B)
         invariant intact(N) & accepted_prepared(N,B) -> exists Q . is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & forall N . member(N,Q) & intact(N) -> voted_prepared(N,B)
@@ -191,9 +195,9 @@ object abstract_balloting = {
 
         invariant well_behaved(N) & voted_committed(N,B) -> confirmed_prepared(N,B)
         # important invariant: a node does not prepare a value that contradicts a previous vote to commit unless that vote cannot reach quorum threshold
-        # invariant is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & intact(N1) & ballot.less_and_incompatible(B1,B2) & voted_committed(N1,B1) & voted_prepared(N1,B2) -> (exists N . intact(N) & member(N,Q) & left_ballnum(N,ballot.counter(B1)) & ~voted_committed(N,B1))
+        invariant is_quorum(Q) & (exists N . intact(N) & member(N,Q)) & intact(N1) & ballot.less_and_incompatible(B1,B2) & voted_committed(N1,B1) & voted_prepared(N1,B2) -> (exists N . intact(N) & member(N,Q) & left_ballnum(N,ballot.counter(B1)) & ~voted_committed(N,B1))
 
         # An accepted prepared value cannot be contradicted.
-        # invariant intact(N2) & accepted_prepared(N2,B2) & intact(N1) & ballot.less_eq(B1, B2) & accepted_committed(N1,B1) -> ballot.value(B1) = ballot.value(B2)
+        invariant intact(N2) & accepted_prepared(N2,B2) & intact(N1) & ballot.less_eq(B1, B2) & accepted_committed(N1,B1) -> ballot.value(B1) = ballot.value(B2)
     } with abstract_balloting.actions, node_properties, quorum_properties, ballnum, val, ballot, intertwined_safety_invariants, extra_invariants
 }
